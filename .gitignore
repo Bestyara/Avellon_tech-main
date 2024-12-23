@@ -1,0 +1,17 @@
+**/venv/
+**/__pycache__/
+**/.idea/
+
+**/__avellon_cache__/
+**/projects/
+**/build/
+**/dist/
+**/data/
+**/save_data/
+**/r_data/
+**/w_data/
+*.html
+*.csv
+*.spec
+
+test.py
