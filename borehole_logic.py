@@ -6,7 +6,7 @@ import statistics as st
 from PySide6.QtWidgets import QWidget, QMessageBox
 from PySide6.QtCore import Qt
 from third_party import get_num_file_by_default, MessageBox
-from graph_widget import XYDataFrame, MaxesDataFrame
+from graph_widget import XYDataFrame, MaxesDataFrame, MinDataFrame
 import config as cf
 
 
@@ -21,6 +21,7 @@ class DataFile:
         self.measurement_num, self.sensor_num = get_num_file_by_default(os.path.basename(self.name),
                                                                         cf.DEFAULT_SENSOR_AMOUNT)
         self.max_value = None
+        self.min_value = None
         self.is_select = False
 
     def __eq__(self, other_) -> bool:
@@ -41,15 +42,23 @@ class DataFile:
                 return float('-inf')
         return self.max_value
 
+    def min(self, is_reload_: bool = False) -> float:
+        if is_reload_ or self.min_value is None:
+            if self.get_xy_dataframe() is  None:
+                return float('inf')
+        return self.min_value
+
     def get_xy_dataframe(self) -> XYDataFrame:
         if self.measurement_num == -1 or self.sensor_num == -1:
             MessageBox().warning(cf.WRONG_FILENAME_WARNING_TITLE, cf.WRONG_FILENAME_WARNING_MESSAGE_F(self.name))
             self.max_value = None
+            self.min_value = None
             return None
         xy_dataframe = XYDataFrame(self.path())
         if not xy_dataframe.active:
             return None
         self.max_value = xy_dataframe.max_y
+        self.min_value = xy_dataframe.min_y
         return xy_dataframe
 
     def exist(self, step_path_: str = None) -> bool:
@@ -57,7 +66,6 @@ class DataFile:
             self.change_path(step_path_)
         path = self.path()
         return os.path.isfile(path)
-
 
 class Step:
     def __init__(self, number_: int, section_path_: str, id_: str = None):
@@ -68,6 +76,7 @@ class Step:
         if self.id is None:
             self.id = uuid4()
         self.max_value = None
+        self.min_value = None
         self.data_list = []
         self.is_select = False
 
@@ -136,6 +145,15 @@ class Step:
                     self.max_value = data_file_max
         return self.max_value
 
+    def min(self, is_reload_: bool = False) -> float:
+        if is_reload_ or self.min_value is None:
+            self.min_value = float('inf')
+            for data_file in self.data_list:
+                data_file_min = data_file.min(is_reload_)
+                if self.min_value > data_file_min:
+                    self.min_value = data_file_min
+        return self.min_value
+
     def get_xy_dataframes_list(self) -> list:
         xy_dataframes_list = list()
         i = 0
@@ -178,6 +196,31 @@ class Step:
                     i += 1
         return sensor_dict
 
+    def get_sensor_mins_dict(self) -> dict:
+        sensor_dict = dict()
+        i = 0
+        for data_file in self.data_list:
+            if data_file.get_xy_dataframe() is None or data_file.sensor_num == -1:
+                while i < len(self.data_list):
+                    if self.data_list[i].sensor_num == -1:
+                        self.remove_file(id=self.data_list[i].id)
+                    else:
+                        i += 1
+                return dict()
+            if data_file.sensor_num not in sensor_dict:
+                sensor_dict[data_file.sensor_num] = [None] * cf.DEFAULT_MEASUREMENT_NUMBER
+            sensor_dict[data_file.sensor_num][data_file.measurement_num] = data_file.min()
+            i += 1
+
+        for sensor_num in sensor_dict.keys():
+            i = 0
+            while i < len(sensor_dict[sensor_num]):
+                if sensor_dict[sensor_num][i] is None:
+                    sensor_dict[sensor_num].pop(i)
+                else:
+                    i += 1
+        return sensor_dict
+
     def get_sensor_maxes_of_maxes_list(self) -> list:
         sensor_list = [0] * cf.DEFAULT_MEASUREMENT_NUMBER
         i = 0
@@ -189,7 +232,22 @@ class Step:
                     else:
                         i += 1
                 return list()
-            sensor_list[data_file.sensor_num] = max(sensor_list[data_file.sensor_num], data_file.max())
+            sensor_list[data_file.sensor_num] = min(sensor_list[data_file.sensor_num], data_file.max())
+            i += 1
+        return sensor_list
+
+    def get_sensor_mins_of_mins_list(self) -> list:
+        sensor_list = [0] * cf.DEFAULT_MEASUREMENT_NUMBER
+        i = 0
+        for data_file in self.data_list:
+            if data_file.get_xy_dataframe() is None or data_file.sensor_num == -1:
+                while i < len(self.data_list):
+                    if self.data_list[i].sensor_num == -1:
+                        self.remove_file(id=self.data_list[i].id)
+                    else:
+                        i += 1
+                return list()
+            sensor_list[data_file.sensor_num] = min(sensor_list[data_file.sensor_num], data_file.min())
             i += 1
         return sensor_list
 
@@ -201,6 +259,14 @@ class Step:
                 dataframes_list.append(MaxesDataFrame(str(sensor_num), sensor_dict[sensor_num]))
         return dataframes_list
 
+    def get_sensor_dataframe_list_min(self) -> list:
+        sensor_dict = self.get_sensor_mins_dict()
+        dataframes_list = []
+        for sensor_num in sensor_dict.keys():
+            if len(sensor_dict[sensor_num]):
+                dataframes_list.append(MinDataFrame(str(sensor_num), sensor_dict[sensor_num]))
+        return dataframes_list
+
     def get_maxes_dataframe(self) -> MaxesDataFrame:
         maxes = []
         for data_file in self.data_list:
@@ -208,6 +274,14 @@ class Step:
                 if data_file.max() != float('-inf'):
                     maxes.append(data_file.max())
         return MaxesDataFrame('step=' + str(self.number), maxes)
+
+    def get_mins_dataframe(self) -> MinDataFrame:
+        mins = []
+        for data_file in self.data_list:
+            if data_file.is_select:
+                if data_file.min() != float('inf'):
+                    mins.append(data_file.min())
+        return MinDataFrame('step=' + str(self.number), mins)
 
     def exist(self, section_path_: str = None) -> bool:
         if section_path_ is not None:
@@ -250,6 +324,7 @@ class Section:
         if self.id is None:
             self.id = uuid4()
         self.max_value = None
+        self.min_value = None
         self.step_list = []
         self.is_select = False
 
@@ -281,6 +356,15 @@ class Section:
                 if self.max_value < step_max:
                     self.max_value = step_max
         return self.max_value
+
+    def min(self, is_reload_: bool = False) -> float:
+        if is_reload_ or self.min_value is None:
+            self.min_value = float('inf')
+            for step in self.step_list:
+                step_min = step.min(is_reload_)
+                if self.min_value > step_min:
+                    self.min_value = step_min
+        return self.min_value
 
     def add_step(self, number_: int, id_: str = None):
         if id_ is not None:
@@ -382,10 +466,30 @@ class Section:
             dataframes_list.append(MaxesDataFrame(str(i), [] if tmp_list[i] is None else tmp_list[i]))
         return dataframes_list
 
+    def get_sensor_dataframe_list_min(self) -> list:
+        dataframes_list = []
+        tmp_list = [None] * cf.DEFAULT_SENSOR_AMOUNT
+        for step in self.step_list:
+            step_df_dict = step.get_sensor_mins_dict()
+            for key in step_df_dict.keys():
+                ikey = int(key)
+                if tmp_list[ikey] is None:
+                    tmp_list[ikey] = []
+                tmp_list[ikey] += step_df_dict[key]
+        for i in range(len(tmp_list)):
+            dataframes_list.append(MinDataFrame(str(i), [] if tmp_list[i] is None else tmp_list[i]))
+        return dataframes_list
+
     def get_maxes_dataframe_list(self) -> list:
         dataframes_list = list()
         for step in self.step_list:
             dataframes_list.append(step.get_maxes_dataframe())
+        return dataframes_list
+
+    def get_mins_dataframe_list(self) -> list:
+        dataframes_list = list()
+        for step in self.step_list:
+            dataframes_list.append(step.get_mins_dataframe())
         return dataframes_list
 
     def get_step_maxes_dataframe_list(self) -> list:
@@ -406,6 +510,26 @@ class Section:
             maxes_dataframe = MaxesDataFrame(str(sensor_num), maxes, x_list=tmp_dict['x'])
             maxes_dataframe.tmp_value = tmp_dict
             dataframes_list.append(maxes_dataframe)
+        return dataframes_list
+
+    def get_step_mins_dataframe_list(self) -> list:
+        dataframes_list = []
+        mins_steps_dict = dict()
+        for step in self.step_list:
+            step_df_list = step.get_sensor_dataframe_list()
+            for dataframe in step_df_list:
+                if dataframe.name not in mins_steps_dict:
+                    mins_steps_dict[dataframe.name] = []
+                mins_steps_dict[dataframe.name].append([dataframe.min(), int(step.number)])
+        for sensor_num in mins_steps_dict.keys():
+            mins_steps_dict[sensor_num].sort(key=lambda ms_: ms_[1])
+            mins, tmp_dict = [], {'x': []}
+            for ms_ in mins_steps_dict[sensor_num]:
+                mins.append(ms_[0])
+                tmp_dict['x'].append(ms_[1])
+            mins_dataframe = MinDataFrame(str(sensor_num), mins, x_list=tmp_dict['x'])
+            mins_dataframe.tmp_value = tmp_dict
+            dataframes_list.append(mins_dataframe)
         return dataframes_list
 
     def get_step_maxes_dataframe_dict(self) -> dict:

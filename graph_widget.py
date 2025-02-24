@@ -9,6 +9,11 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from third_party import MyWarning, MessageBox
 import config as cf
+import pyqtgraph as pg
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QGraphicsView
+from scipy.signal import butter, filtfilt
+
 
 
 class AbstractDataFrame:
@@ -39,6 +44,7 @@ class XYDataFrame(AbstractDataFrame):
         self.filename = filename_
         self.data = None
         self.max_y = None
+        self.min_y = None
         is_exception = False
 
         if not os.path.exists(self.filename) or not os.path.isfile(self.filename):
@@ -60,7 +66,7 @@ class XYDataFrame(AbstractDataFrame):
 
     def clear(self):
         self.active = False
-        self.data = self.header = self.max_y = None
+        self.data = self.header = self.max_y = self.min_y = None
 
     def is_correct_read(self) -> bool:
         return self.data is not None and self.header is not None
@@ -86,6 +92,7 @@ class XYDataFrame(AbstractDataFrame):
         self.data = self.data.drop(index=[0, 1, 2, 3, 4, 5])
         self.data = {'y': self.data[0].astype(float).values.tolist()}
         self.max_y = max(self.data['y'])
+        self.min_y = min(self.data['y'])
 
     @staticmethod
     def get_data_x(data_points_: int, time_base_: int) -> dict:
@@ -133,6 +140,42 @@ class MaxesDataFrame(AbstractDataFrame):
             x_dataframe['x'].append(i)
         return x_dataframe
 
+class MinDataFrame(AbstractDataFrame):
+    def __init__(self, name_: str, mins_: list, parent_: QWidget = None, min_value_: float = None, **kwargs):
+        super().__init__(name_, parent_)
+        self.data = {'x': [], 'y': mins_, 'ry': []}
+        if 'x_list' in kwargs:
+            self.data['x'] = kwargs['x_list']
+        self.min_value = None
+
+        self.data_init(min_value_)
+        # print(self.data)
+
+        self.tmp_value = None
+
+    def min(self, min_value_: float = None) -> float:
+        if min_value_ is not None:
+            self.min_value = min_value_
+        if self.min_value is None and len(self.data['y']):
+            self.min_value = min(self.data['y'])
+        return self.min_value
+
+    def data_init(self, min_value_: float = None) -> None:
+        self.compute_relative_data(min_value_)
+
+    def compute_relative_data(self, min_value_: float = None) -> None:
+        min_of_mins = min_value_
+        if min_of_mins is None:
+            min_of_mins = self.min()
+        for min_ in self.data['y']:
+            self.data['ry'].append(min_ / min_of_mins)
+
+    @staticmethod
+    def get_data_x(data_points_: int, start_point_: int = 0, step_: int = 1) -> dict:
+        x_dataframe = {'x': []}
+        for i in range(start_point_, start_point_ + data_points_ * step_, step_):
+            x_dataframe['x'].append(i)
+        return x_dataframe
 
 class AbstractQtGraphWidget(PlotWidget):
     def __init__(self, data_frames_, parent_: QWidget = None):
@@ -169,6 +212,48 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
         self.setLabel('left', 'Напряжение (мВ)')
         self.setLabel('bottom', 'Время (с)')
 
+        # Добавляем текстовый элемент для отображения координат
+        self.coordinates_text = pg.TextItem("", anchor=(1, 1))
+        self.addItem(self.coordinates_text)
+
+        # Включаем отслеживание мыши
+        self.setMouseTracking(True)
+
+        # Подключаем событие движения мыши
+        self.scene().sigMouseMoved.connect(self.on_mouse_move)
+
+    def on_mouse_move(self, pos):
+        """ Обработчик движения мыши для отображения координат на графике """
+        # Преобразуем позицию в координаты графика
+        mouse_point = self.plotItem.vb.mapSceneToView(pos)
+        x = mouse_point.x()
+        y = mouse_point.y()
+
+        # Найдём ближайшую точку данных
+        closest_x, closest_y = self.find_closest_point(x, y)
+
+        # Обновляем текстовый элемент с координатами
+        self.coordinates_text.setText(f"X: {closest_x:.2f}, Y: {closest_y:.2f}")
+        self.coordinates_text.setPos(closest_x, closest_y)
+
+    def find_closest_point(self, x, y):
+        """ Метод для нахождения ближайшей точки к позиции курсора """
+        min_dist = float('inf')
+        closest_x, closest_y = None, None
+
+        for line in self.lines:
+            data_x = line.xData  # Данные по оси X для текущей линии
+            data_y = line.yData  # Данные по оси Y для текущей линии
+
+            # Ищем ближайшую точку
+            for i in range(len(data_x)):
+                dist = (data_x[i] - x) ** 2 + (data_y[i] - y) ** 2  # Евклидово расстояние
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_x, closest_y = data_x[i], data_y[i]
+
+        return closest_x, closest_y
+
     def data_x_init(self) -> None:
         self.dict_data_x = dict()
         for key in self.data_frames.keys():
@@ -186,19 +271,73 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
         color_i, c = 0, 0
         for key in self.data_frames.keys():
             for i in range(len(self.data_frames[key])):
+                # Вычисляем среднее значение оси Y для текущего набора данных
+                y_data = self.data_frames[key][i].data["y"]
+                mean_y = sum(y_data) / len(y_data) if len(y_data) > 0 else 0
+                # Если состояние равновесия (mean_y) не равно нулю, корректируем данные
+                if mean_y != 0:
+                    y_data = [y - mean_y for y in y_data]  # Сдвигаем данные оси Y
                 if color_i >= len(cf.COLOR_NAMES):
                     color_i = 0
                 if c >= len(self.lines):
-                    self.lines.append(self.plot(self.dict_data_x[self.data_frames[key][i].header[cf.DATA_POINTS_HEADER]]
-                                                [self.data_frames[key][i].header[cf.TIME_BASE_HEADER]]['x'],
-                                                self.data_frames[key][i].data["y"], pen=mkPen(cf.COLOR_NAMES[color_i])))
+                    self.lines.append(
+                        self.plot(
+                            self.dict_data_x[self.data_frames[key][i].header[cf.DATA_POINTS_HEADER]]
+                            [self.data_frames[key][i].header[cf.TIME_BASE_HEADER]]['x'],
+                            y_data,
+                            pen=mkPen(cf.COLOR_NAMES[color_i])
+                        )
+                    )
                 elif self.data_frames[key][i].active:
-                    self.lines[c].setData(self.dict_data_x[self.data_frames[key][i].header[cf.DATA_POINTS_HEADER]]
-                                          [self.data_frames[key][i].header[cf.TIME_BASE_HEADER]]['x'],
-                                          self.data_frames[key][i].data["y"])
+                    self.lines[c].setData(
+                        self.dict_data_x[self.data_frames[key][i].header[cf.DATA_POINTS_HEADER]]
+                        [self.data_frames[key][i].header[cf.TIME_BASE_HEADER]]['x'],
+                        y_data
+                    )
                 self.legend.addItem(self.lines[c], self.data_frames[key][i].name)
                 c += 1
                 color_i += 1
+    def apply_filter(self, filter_type: str, cutoff_freq: float, sample_rate: float = 1000):
+        """
+        Применяет фильтр к данным.
+        :param filter_type: Тип фильтра ("high" для ФВЧ, "low" для ФНЧ).
+        :param cutoff_freq: Частота среза в Гц.
+        :param sample_rate: Частота дискретизации сигнала (по умолчанию 1000 Гц).
+        """
+        for key in self.data_frames.keys():
+            for dataframe in self.data_frames[key]:
+                if dataframe.active:
+                    # Получаем данные сигнала
+                    y_data = dataframe.data['y']
+
+                    # Применяем фильтр
+                    filtered_data = self._butter_filter(y_data, cutoff_freq, sample_rate, filter_type)
+
+                    # Обновляем данные
+                    dataframe.data['y'] = filtered_data
+
+        # Перестраиваем график
+        self.recreate(self.data_frames)
+
+    def _butter_filter(self, data, cutoff_freq, sample_rate, filter_type, order=5):
+        """
+        Применяет фильтр Баттерворта к данным.
+        :param data: Исходные данные (список значений).
+        :param cutoff_freq: Частота среза в Гц.
+        :param sample_rate: Частота дискретизации сигнала.
+        :param filter_type: Тип фильтра ("high" для ФВЧ, "low" для ФНЧ).
+        :param order: Порядок фильтра (по умолчанию 5).
+        :return: Отфильтрованные данные.
+        """
+        nyquist_freq = 0.5 * sample_rate
+        normal_cutoff = cutoff_freq / nyquist_freq
+
+        # Создаем фильтр Баттерворта
+        b, a = butter(order, normal_cutoff, btype=filter_type, analog=False)
+
+        # Применяем фильтр с нулевой фазовой задержкой
+        filtered_data = filtfilt(b, a, data)
+        return filtered_data
 
 
 class FrequencyResponseGraphWidget(AbstractQtGraphWidget):
@@ -374,6 +513,42 @@ class DepthResponseGraphWidget(AbstractQtGraphWidget):
         self.sensor_num = kwargs['sensor_num'] if 'sensor_num' in kwargs else -1
         self.step_num = kwargs['step_num'] if 'step_num' in kwargs else -1
         super().recreate(data_frames_, **kwargs)
+
+    def on_mouse_move(self, event):
+        """ Обработчик движения мыши для отображения координат на графике """
+        pos = event  # Получаем позицию мыши в виде QPointF
+
+        # Преобразуем позицию в координаты графика
+        if self.plotItem.sceneBoundingRect().contains(pos):
+            mouse_point = self.plotItem.vb.mapSceneToView(pos)
+            x = mouse_point.x()
+            y = mouse_point.y()
+
+            # Найдём ближайшую точку данных
+            closest_x, closest_y = self.find_closest_point(x, y)
+
+            # Обновляем текстовый элемент с координатами
+            self.coordinates_text.setText(f"X: {closest_x:.2f}, Y: {closest_y:.2f}")
+            self.coordinates_text.setPos(closest_x, closest_y)
+
+        def find_closest_point(self, x, y):
+            """ Метод для нахождения ближайшей точки к позиции курсора """
+            min_dist = float('inf')
+            closest_x, closest_y = None, None
+
+            for line in self.lines:
+                data_x = line.xData  # Данные по оси X для текущей линии
+                data_y = line.yData  # Данные по оси Y для текущей линии
+
+                # Ищем ближайшую точку
+                for i in range(len(data_x)):
+                    dist = (data_x[i] - x) ** 2 + (data_y[i] - y) ** 2  # Евклидово расстояние
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_x, closest_y = data_x[i], data_y[i]
+
+            return closest_x, closest_y
+
 
 
 # MATPLOTLIB GRAPH

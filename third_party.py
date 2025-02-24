@@ -2,9 +2,9 @@ import os
 import pathlib
 from uuid import uuid4
 from PySide6.QtWidgets import QWidget, QCheckBox, QVBoxLayout, QHBoxLayout, QMessageBox, \
-    QPushButton, QFileDialog, QListWidget, QListWidgetItem, QLabel, QDialog, QTextEdit, QTabWidget
+    QPushButton, QFileDialog, QListWidget, QListWidgetItem, QLabel, QDialog, QTextEdit, QTabWidget, QLineEdit
 from PySide6.QtCore import Qt, QUrl, QPoint, QSize, QRect, QRunnable, QThreadPool, Signal, QObject
-from PySide6.QtGui import QMovie
+from PySide6.QtGui import QMovie, QDoubleValidator
 import config as cf
 
 
@@ -18,26 +18,26 @@ class MyWarning(Warning):
 class MessageSignalHandler(QObject):
     information = Signal(str, str)
     warning = Signal(str, str)
-    
+
 
 class MessageBox:
     def __init__(self) -> None:
         self.signal_handler = MessageSignalHandler()
         self.signal_handler.information.connect(self.wrapper_information_message)
         self.signal_handler.warning.connect(self.wrapper_warning_message)
-    
+
     def information(self, title_: str, message_: str) -> None:
         self.signal_handler.information.emit(title_, message_)
-    
+
     def warning(self, title_: str, message_: str) -> None:
         self.signal_handler.warning.emit(title_, message_)
-    
+
     def wrapper_information_message(self, title_: str, message_: str) -> None:
         QMessageBox.information(None, title_, message_, QMessageBox.Ok)
-    
+
     def wrapper_warning_message(self, title_: str, message_: str) -> None:
         QMessageBox.warning(None, title_, message_, QMessageBox.Ok)
-    
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(MessageBox, cls).__new__(cls)
@@ -94,10 +94,15 @@ def basename_decorator(name_: str) -> str:
 
 class SimpleAbstractItemWidget:
     def __init__(self, name_: str = None, parent_: QWidget = None, *args, **kwargs): ...
+
     def __eq__(self, other_) -> bool: ...
+
     def __set_visible(self, is_show_: bool) -> None: ...
+
     def recreate(self, name_: str, *args, **kwargs) -> None: ...
+
     def __all_widgets_to_layout(self) -> None: ...
+
     def delete_action(self) -> None: ...
 
 
@@ -225,7 +230,8 @@ def select_path_to_files(filter_str_: str, parent_: QWidget = None, **kwargs) ->
 
 def select_path_to_one_file(filter_str_: str, parent_: QWidget = None, **kwargs) -> str:
     if 'dir' in kwargs:
-        return QFileDialog.getOpenFileName(parent_, cf.SELECT_FILE_FILE_DIALOG_TITLE, dir=kwargs['dir'], filter=filter_str_)[0]
+        return \
+        QFileDialog.getOpenFileName(parent_, cf.SELECT_FILE_FILE_DIALOG_TITLE, dir=kwargs['dir'], filter=filter_str_)[0]
     return QFileDialog.getOpenFileName(parent_, cf.SELECT_FILE_FILE_DIALOG_TITLE, filter=filter_str_)[0]
 
 
@@ -296,7 +302,7 @@ class HelpInfoPageWidget(QWidget):
         self.text_widget.setText(text_)
         self.text_widget.setReadOnly(True)
         self.__all_widgets_to_layout()
-    
+
     def __all_widgets_to_layout(self) -> None:
         core_layout = QVBoxLayout()
         core_layout.addWidget(self.text_widget)
@@ -334,8 +340,121 @@ class HelpInfoDialog(AbstractToolDialog):
         self.tab_widget.addTab(HelpInfoPageWidget(cf.AMPLITUDE_HELP_INFO, self), 'Амлитудный')
         self.tab_widget.addTab(HelpInfoPageWidget(cf.DEPTH_HELP_INFO, self), 'Глубинный')
         self.__all_widgets_to_layout()
-    
+
     def __all_widgets_to_layout(self) -> None:
         core_layout = QVBoxLayout()
         core_layout.addWidget(self.tab_widget)
         self.setLayout(core_layout)
+
+
+class FrequencyFilterDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Фильтр частот")
+        self.setFixedSize(300, 100)
+
+        # Валидатор для частоты среза (от 0 до 10000 Гц, 2 знака после запятой)
+        validator = QDoubleValidator(0.0, 10000.0, 2)
+
+        # Основной layout
+        layout = QVBoxLayout()
+
+        # Метка с инструкцией
+        label = QLabel("Введите частоту среза (Гц):")
+        layout.addWidget(label)
+
+        # Поле для ввода частоты среза
+        self.cutoff_frequency_input = QLineEdit(self)
+        self.cutoff_frequency_input.setValidator(validator)
+        layout.addWidget(self.cutoff_frequency_input)
+
+        # Кнопки для фильтрации
+        button_layout = QHBoxLayout()
+
+        # Кнопка для ФВЧ
+        high_pass_button = QPushButton("Фильтр верхних частот")
+        high_pass_button.clicked.connect(lambda: self.apply_filter("high"))
+        button_layout.addWidget(high_pass_button)
+
+        # Кнопка для ФНЧ
+        low_pass_button = QPushButton("Фильтр нижних частот")
+        low_pass_button.clicked.connect(lambda: self.apply_filter("low"))
+        button_layout.addWidget(low_pass_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def apply_filter(self, filter_type: str):
+        """
+        Применяет фильтр и закрывает окно.
+        :param filter_type: Тип фильтра ("high" для ФВЧ, "low" для ФНЧ).
+        """
+        try:
+            # Получаем частоту среза из поля ввода
+            cutoff_freq = float(self.cutoff_frequency_input.text())
+
+            # Передаем параметры фильтра в основной код
+            self.parent().apply_filter(filter_type, cutoff_freq)
+
+            # Закрываем окно после применения фильтра
+            self.close()
+        except ValueError:
+            print("Ошибка: введите корректное значение частоты среза.")
+
+    def apply_low_pass_filter(self):
+        # Логика применения фильтра нижних частот
+        cutoff = self.cutoff_frequency_input.text()
+        print(f"Применяется фильтр нижних частот с частотой среза: {cutoff} Гц")
+        self.close()  # Закрываем окно после применения фильтра
+# class FrequencyFilterDialog(QDialog):
+#     def __init__(self, parent=None):
+#         super().__init__(parent)
+#         self.setWindowTitle("Фильтр частот")
+#         self.setFixedSize(500, 300)
+#
+#         # Простейший интерфейс для теста
+#         layout = QVBoxLayout()
+#         label = QLabel("Окно фильтра частот")
+#         close_btn = QPushButton("Закрыть")
+#         close_btn.clicked.connect(self.close)
+#
+#         layout.addWidget(label)
+#         layout.addWidget(close_btn)
+#         self.setLayout(layout)
+
+# class FilterDialog(AbstractToolDialog):
+# def __init__(self, parent=None):
+#     super().__init__(parent)
+#     self.setWindowTitle("Фильтр частот")
+#     self.setFixedSize(300, 150)
+#     self.text_widget1 = QTextEdit(self)
+
+# # Надпись
+# self.label = QLabel("Введите значение:", self)
+# self.label.setAlignment(Qt.AlignCenter)
+
+
+# Поле ввода
+# self.input_field = QLineEdit(self)
+# self.input_field.setPlaceholderText("Введите число")
+# self.input_field.setValidator(QDoubleValidator())  # Ввод только чисел, включая отрицательные
+
+# # Кнопка "Отфильтровать"
+# self.filter_button = QPushButton("Отфильтровать", self)
+# self.filter_button.clicked.connect(self.on_filter_button_clicked)
+
+# # Расположение элементов
+# self.layout = QVBoxLayout()
+# self.layout.addWidget(self.label)
+# self.layout.addWidget(self.input_field)
+# self.layout.addWidget(self.filter_button)
+# self.setLayout(self.layout)
+
+# def on_filter_button_clicked(self):
+#     """
+#     Действие при нажатии кнопки "Отфильтровать".
+#     Закрывает окно.
+#     """
+#     # Здесь можно добавить логику обработки введенного значения
+#     print(f"Значение фильтра: {self.input_field.text()}")  # Временный вывод
+#     self.close()

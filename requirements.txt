@@ -2,3 +2,6 @@ pyside6
 pandas
 pyqtgraph
 matplotlib
+numpy
+PyQt5
+scipy
