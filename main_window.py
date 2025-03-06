@@ -1117,7 +1117,7 @@ class OscilloscopeGraphWindowWidget(AbstractGraphWindowWidget):
         super().__init__(borehole_window_)
         self.table_widget = OscilloscopeTableWidget(self)
         self.plot_widget = OscilloscopeGraphWidget(dict(), self)
-        self.filter_dialog = FrequencyFilterDialog(self)
+        # self.filter_dialog = FrequencyFilterDialog(self)
         self.__all_widgets_to_layout()
         self.activate(False)
 
