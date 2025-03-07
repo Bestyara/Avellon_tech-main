@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QCheckBox,
 from PySide6.QtGui import QScreen, QIcon, QPixmap, QIntValidator, QDoubleValidator, QPainter, QPen
 from PySide6.QtCore import Qt, QPoint, QSize, QRect, QLine
 from PySide6.QtWidgets import QAbstractItemView
+
+from db_storage import DbStorage
 from graph_widget import OscilloscopeGraphWidget, AmplitudeTimeGraphWidget, \
     FrequencyResponseGraphWidget, WindRoseGraphWidget, DepthResponseGraphWidget
 from third_party import AbstractFunctor, HelpInfoDialog, SimpleItemListWidget, \
@@ -65,10 +67,11 @@ import config as cf
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, app_: QApplication):
+    def __init__(self, app_: QApplication, db_: DbStorage):
         super().__init__()
         self.app = app_
         mb = MessageBox()
+        self.db = db_
         self.__window_init()
         self.__cache_init()
 
