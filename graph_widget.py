@@ -235,7 +235,8 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
         # Обновляем текстовый элемент с координатами
         self.coordinates_text.setText(f"X: {closest_x:.2f}, Y: {closest_y:.2f}")
         self.coordinates_text.setPos(closest_x, closest_y)
-
+        self.coordinates_text.setColor((0, 0, 0))
+        
     def find_closest_point(self, x, y):
         """ Метод для нахождения ближайшей точки к позиции курсора """
         min_dist = float('inf')
