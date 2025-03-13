@@ -980,8 +980,6 @@ class AbstractGraphWindowWidget(AbstractWindowWidget):
         self.tools_menu_btn = self.menu_bar.addMenu('Инструменты')
         self.help_action_btn = self.menu_bar.addAction('&Справка', "Ctrl+i")
         self.back_action_btn = self.menu_bar.addAction('&Назад', "Shift+Esc")
-        self.filter_btn = self.menu_bar.addAction('&Фильтр частот', "Shift+f")
-        self.filter_btn.setVisible(False)
         self.__actions_init()
 
     def __actions_init(self) -> None:
@@ -990,22 +988,23 @@ class AbstractGraphWindowWidget(AbstractWindowWidget):
         self.__tools_menu_init()
         self.help_action_btn.triggered.connect(self.help_window_action)
         self.back_action_btn.triggered.connect(self.back_action)
-        self.filter_btn.triggered.connect(self.filter_oscilloscope)
 
     def __tools_menu_init(self) -> None:
         tools_save_action_btn = self.tools_menu_btn.addAction('Сохранить')
         tools_save_as_action_btn = self.tools_menu_btn.addAction('Сохранить как')
         hide_lines_action_btn = self.tools_menu_btn.addAction('Отображение линий')
+        self.filter_btn = self.tools_menu_btn.addAction('Фильтр частот')
+        self.filter_btn.setVisible(isinstance(self, OscilloscopeGraphWindowWidget))
 
         tools_save_action_btn.triggered.connect(self.save_data_by_default_action)
         tools_save_as_action_btn.triggered.connect(self.save_data_by_select_action)
         hide_lines_action_btn.triggered.connect(self.run_hide_line_dialog_action)
+        self.filter_btn.triggered.connect(self.filter_oscilloscope)
 
     def activate(self, is_active_: bool = True) -> None:
         self.hide_line_dialog.close()
         self.setVisible(is_active_)
         self.filter_btn.setVisible(isinstance(self, OscilloscopeGraphWindowWidget))
-        self.filter_btn.triggered.connect(self.filter_oscilloscope)
 
     def plot_graph_action(self) -> None:
         ...
@@ -1043,7 +1042,7 @@ class AbstractGraphWindowWidget(AbstractWindowWidget):
 
     def filter_oscilloscope(self):
         """Открывает диалоговое окно для настройки фильтра."""
-        self.filter_dialog = FrequencyFilterDialog(self)
+        # self.filter_dialog = FrequencyFilterDialog(self)
         self.filter_dialog.show()
 
 
