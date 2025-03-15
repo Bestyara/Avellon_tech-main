@@ -15,27 +15,29 @@ class LoadLabel(QLabel):
         self.setWindowModality(Qt.ApplicationModal)
         self.setScaledContents(True)
         self.setMaximumWidth(200)
-        
+
         self.movie = QMovie(cf.LOAD_LABEL_PATH)
         self.setMovie(self.movie)
-    
+
     def __set_actual_size(self, image_size_: QSize):
         actual_size = QSize(200, 0)
         actual_size.setHeight(image_size_.height() * actual_size.width() // image_size_.width())
         self.setFixedSize(actual_size)
-    
+
     def run(self) -> None:
         self.movie.start()
         self.__set_actual_size(self.movie.currentImage().size())
         self.show()
-    
+
     def stop(self) -> None:
         self.movie.stop()
         self.close()
-        
+
+
 class LoadWorker(QObject):
     exception_signal = Signal(str, str)
     complete = Signal(list)
+
     def run(self, func_: classmethod, args: tuple, kwargs: dict) -> None:
         print("Start Work in other Thread")
         try:
@@ -45,8 +47,8 @@ class LoadWorker(QObject):
             self.exception_signal.emit(mw.exception_title, mw.message)
         except BaseException:
             self.exception_signal.emit(cf.UNKNOWN_WARNING_TITLE, cf.UNKNOWN_WARNING_MESSAGE)
-        
-        
+
+
 class LoadDirector(QObject):
     work_inition = Signal(classmethod, tuple, dict)
 
@@ -62,7 +64,7 @@ class LoadThread:
         self.worker.exception_signal.connect(self.exception)
         self.worker.complete.connect(self.complete_work)
         self.director.work_inition.connect(self.worker.run)
-        
+
         self.after_func = None
         self.is_result_to_after = False
         self.after_args = tuple()
@@ -77,7 +79,7 @@ class LoadThread:
         finally:
             self.is_busy = False
         return True
-    
+
     def after_work(self, other_, after_func_: str, is_result_to_after_: bool = False, *args, **kwargs) -> None:
         self.after_func = None if after_func_ is None else getattr(other_, after_func_)
         self.is_result_to_after = is_result_to_after_
@@ -86,7 +88,7 @@ class LoadThread:
 
     def exception(self, title_: str, message_: str) -> None:
         MessageBox().warning(title_, message_)
-    
+
     def complete_work(self, list_result_: list) -> None:
         work_result = list_result_[0]
         if self.after_func is not None:
@@ -94,12 +96,12 @@ class LoadThread:
                 self.after_func(work_result, *self.after_args, **self.after_kwargs)
             else:
                 self.after_func(*self.after_args, **self.after_kwargs)
-    
+
     def __new__(cls):
         if not hasattr(cls, 'instance'):
             cls.instance = super(LoadThread, cls).__new__(cls)
         return cls.instance
-    
+
 
 def loading(after_func_: str = None, is_result_to_it_: bool = False, *after_args, **after_kwargs):
     def loading_decorator(func_):
@@ -108,5 +110,7 @@ def loading(after_func_: str = None, is_result_to_it_: bool = False, *after_args
             threads = LoadThread()
             threads.after_work(self, after_func_, is_result_to_it_, *after_args, **after_kwargs)
             threads.start_worker(func_, self, *args, **kwargs)
+
         return wrapper
+
     return loading_decorator

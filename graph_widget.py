@@ -2,18 +2,17 @@ import os
 import numpy as np
 import pandas as pd
 from uuid import uuid4
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QDialog
 from PySide6.QtCore import QPoint, QRect
-from pyqtgraph import PlotWidget, mkPen
+from pyqtgraph import PlotWidget, mkPen, QtGui, QtCore
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from third_party import MyWarning, MessageBox
+from third_party import MyWarning, MessageBox, AxisXDialog
 import config as cf
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QGraphicsView
 from scipy.signal import butter, filtfilt
-
 
 
 class AbstractDataFrame:
@@ -83,7 +82,7 @@ class XYDataFrame(AbstractDataFrame):
             res[header_name] = cf.CSV_FILE_HEADER_CONTENT[header_name] \
                 .get(self.data.iloc[i][0][dot_index + 1:])
             if header_name == cf.TIME_BASE_HEADER:
-                res[header_name] *= 1 if self.data.iloc[i][0][dot_index + 1:].find('mV') else 10**-3
+                res[header_name] *= 1 if self.data.iloc[i][0][dot_index + 1:].find('mV') else 10 ** -3
         return res
 
     def data_init(self) -> None:
@@ -140,6 +139,7 @@ class MaxesDataFrame(AbstractDataFrame):
             x_dataframe['x'].append(i)
         return x_dataframe
 
+
 class MinDataFrame(AbstractDataFrame):
     def __init__(self, name_: str, mins_: list, parent_: QWidget = None, min_value_: float = None, **kwargs):
         super().__init__(name_, parent_)
@@ -176,6 +176,7 @@ class MinDataFrame(AbstractDataFrame):
         for i in range(start_point_, start_point_ + data_points_ * step_, step_):
             x_dataframe['x'].append(i)
         return x_dataframe
+
 
 class AbstractQtGraphWidget(PlotWidget):
     def __init__(self, data_frames_, parent_: QWidget = None):
@@ -236,7 +237,7 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
         self.coordinates_text.setText(f"X: {closest_x:.2f}, Y: {closest_y:.2f}")
         self.coordinates_text.setPos(closest_x, closest_y)
         self.coordinates_text.setColor((0, 0, 0))
-        
+
     def find_closest_point(self, x, y):
         """ Метод для нахождения ближайшей точки к позиции курсора """
         min_dist = float('inf')
@@ -261,9 +262,11 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
             for dataframe in self.data_frames[key]:
                 if dataframe.header[cf.DATA_POINTS_HEADER] not in self.dict_data_x:
                     self.dict_data_x[dataframe.header[cf.DATA_POINTS_HEADER]] = dict()
-                if dataframe.header[cf.TIME_BASE_HEADER] not in self.dict_data_x[dataframe.header[cf.DATA_POINTS_HEADER]]:
+                if dataframe.header[cf.TIME_BASE_HEADER] not in self.dict_data_x[
+                    dataframe.header[cf.DATA_POINTS_HEADER]]:
                     self.dict_data_x[dataframe.header[cf.DATA_POINTS_HEADER]][dataframe.header[cf.TIME_BASE_HEADER]] \
-                        = XYDataFrame.get_data_x(dataframe.header[cf.DATA_POINTS_HEADER], dataframe.header[cf.TIME_BASE_HEADER])
+                        = XYDataFrame.get_data_x(dataframe.header[cf.DATA_POINTS_HEADER],
+                                                 dataframe.header[cf.TIME_BASE_HEADER])
 
     def graph_init(self) -> None:
         self.legend.clear()
@@ -298,6 +301,7 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
                 self.legend.addItem(self.lines[c], self.data_frames[key][i].name)
                 c += 1
                 color_i += 1
+
     def apply_filter(self, filter_type: str, cutoff_freq: float, sample_rate: float = 1000):
         """
         Применяет фильтр к данным.
@@ -346,35 +350,117 @@ class FrequencyResponseGraphWidget(AbstractQtGraphWidget):
         super().__init__(data_frames_, parent_)
         self.graph_init()
         self.setTitle("Частотная характеристика")
-        self.setLabel('left', 'U, В')
+        self.setLabel('left', 'U, мВ')
         self.setLabel('bottom', 'f, кГц')
+
+        # Добавляем текст для отображения координат
+        self.annot = pg.TextItem("", anchor=(0, 1))
+        self.addItem(self.annot)
+        self.annot.setPos(0, 0)
+        self.annot.hide()
+
+        # Подключаем событие для отслеживания движения мыши
+        self.scene().sigMouseMoved.connect(self.onMouseMoved)
 
     def data_x_init(self) -> None:
         self.dict_data_x = {21: MaxesDataFrame.get_data_x(21, 4, 2)}
 
     def graph_init(self) -> None:
         self.legend.clear()
+        self.lines = []  # Список для хранения линий графика
+        self.plotted_points = []  # Список для хранения точек графиков (x, y)
         if len(self.data_frames.keys()) < 1:
             return
         color_i, c = 0, 0
         for key in self.data_frames.keys():
             for i in range(len(self.data_frames[key])):
+                y_data = self.data_frames[key][i].data["y"]
+                y_data = [abs(y) for y in y_data]
                 if color_i >= len(cf.COLOR_NAMES):
                     color_i = 0
                 len_data = len(self.data_frames[key][i].data["y"])
+
                 if len_data not in self.dict_data_x:
                     self.dict_data_x[len_data] = MaxesDataFrame.get_data_x(len_data, 4, 2)
+                    x_data = self.dict_data_x[len_data]['x']
+                # Добавляем линию графика
                 if c >= len(self.lines):
-                    self.lines.append(self.plot(self.dict_data_x[len_data]['x'],
-                                                self.data_frames[key][i].data["y"],
-                                                pen=mkPen(cf.COLOR_NAMES[color_i], width=3)))
+                    self.lines.append(self.plot(x_data, y_data, pen=mkPen(cf.COLOR_NAMES[color_i], width=3)))
                 elif self.data_frames[key][i].active:
-                    self.lines[c].setData(self.dict_data_x[len_data]['x'],
-                                          self.data_frames[key][i].data["y"])
+                    self.lines[c].setData(x_data, y_data)
+
+                # Сохраняем данные точек для дальнейшей обработки при наведении
+                self.plotted_points.append((x_data, y_data))
+
                 self.legend.addItem(self.lines[c], self.data_frames[key][i].name)
                 c += 1
                 color_i += 1
             # break
+
+    def onMouseMoved(self, evt):
+        # Получаем положение мыши в координатах графика
+        mouse_point = self.plotItem.vb.mapSceneToView(evt)
+        x_mouse = mouse_point.x()
+        y_mouse = mouse_point.y()
+
+        # Ищем ближайшую точку к положению курсора
+        closest_point = None
+        min_dist = float('inf')
+
+        # Проверяем все точки на графике
+        for points in self.plotted_points:
+            x_data, y_data = points
+            for x, y in zip(x_data, y_data):
+                dist = ((x - x_mouse) ** 2 + (y - y_mouse) ** 2) ** 0.5  # Евклидово расстояние
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_point = (x, y)
+
+        # Если нашли ближайшую точку, показываем аннотацию
+        if closest_point and min_dist < 0.9:  # Пороговое расстояние
+            self.annot.setPos(closest_point[0], closest_point[1])
+
+            # Изменение цвета и стиля текста через HTML
+            self.annot.setHtml(
+                f'<span style="color: #FF0000; font-size: 12pt;">f={closest_point[0]:.2f} кГц, U={closest_point[1]:.2f} мВ</span>')
+
+            self.annot.show()
+        else:
+            self.annot.hide()
+
+    def update_axis_x(self, start_value: float, step_value: float):
+        """
+        Обновляет данные по оси X на основе начального значения и шага.
+        :param start_value: Начальное значение по оси X.
+        :param step_value: Шаг по оси X.
+        """
+        for key in self.data_frames.keys():
+            for dataframe in self.data_frames[key]:
+                if dataframe.active:
+                    # Проверяем, что данные по оси Y существуют
+                    if 'y' not in dataframe.data:
+                        continue
+                    len_data = len(dataframe.data['y'])
+                    # Обновляем данные по оси X
+                    x_data = [start_value + i * step_value for i in range(len_data)]
+                    dataframe.data['x'] = x_data
+
+        # Перестраиваем график
+        self.recreatey(self.data_frames)
+
+    def recreatey(self, data_frames):
+        """
+        Перестраивает график на основе обновленных данных.
+        """
+        print("Recreating graph...")  # Отладочное сообщение
+        print(f"Data frames: {data_frames}")  # Отладочное сообщение
+        # Очищаем только линии графика
+        for line in self.lines:
+            print(f"Removing line: {line}")  # Отладочное сообщение
+            self.removeItem(line)
+        self.lines = []
+        self.plotted_points = []
+        self.graph_init()  # Инициализируем график заново
 
 
 class AmplitudeTimeGraphWidget(AbstractQtGraphWidget):
@@ -411,19 +497,25 @@ class AmplitudeTimeGraphWidget(AbstractQtGraphWidget):
                                   max(self.data_frames[self.section_name_mode][i].data['x'])],
                             'y': [min(
                                 self.data_frames[self.section_name_mode][i].data['ry' if self.is_relative else "y"]),
-                                  max(self.data_frames[self.section_name_mode][i].data[
-                                          'ry' if self.is_relative else "y"])]}
-                range_list['x'][0] = minmaxes['x'][0] if range_list['x'][0] is None else  min(minmaxes['x'][0], range_list['x'][0])
-                range_list['x'][1] = minmaxes['x'][1] if range_list['x'][1] is None else max(minmaxes['x'][1], range_list['x'][1])
-                range_list['y'][0] = minmaxes['y'][0] if range_list['y'][0] is None else min(minmaxes['y'][0], range_list['y'][0])
-                range_list['y'][1] = minmaxes['y'][1] if range_list['y'][1] is None else max(minmaxes['y'][1], range_list['y'][1])
+                                max(self.data_frames[self.section_name_mode][i].data[
+                                        'ry' if self.is_relative else "y"])]}
+                range_list['x'][0] = minmaxes['x'][0] if range_list['x'][0] is None else min(minmaxes['x'][0],
+                                                                                             range_list['x'][0])
+                range_list['x'][1] = minmaxes['x'][1] if range_list['x'][1] is None else max(minmaxes['x'][1],
+                                                                                             range_list['x'][1])
+                range_list['y'][0] = minmaxes['y'][0] if range_list['y'][0] is None else min(minmaxes['y'][0],
+                                                                                             range_list['y'][0])
+                range_list['y'][1] = minmaxes['y'][1] if range_list['y'][1] is None else max(minmaxes['y'][1],
+                                                                                             range_list['y'][1])
                 if c >= len(self.lines):
                     self.lines.append(self.plot(self.data_frames[self.section_name_mode][i].data['x'],
-                                                self.data_frames[self.section_name_mode][i].data['ry' if self.is_relative else "y"],
+                                                self.data_frames[self.section_name_mode][i].data[
+                                                    'ry' if self.is_relative else "y"],
                                                 pen=mkPen(cf.COLOR_NAMES[color_i])))
                 elif self.data_frames[self.section_name_mode][i].active:
                     self.lines[c].setData(self.data_frames[self.section_name_mode][i].data["x"],
-                                          self.data_frames[self.section_name_mode][i].data['ry' if self.is_relative else "y"])
+                                          self.data_frames[self.section_name_mode][i].data[
+                                              'ry' if self.is_relative else "y"])
                 self.legend.addItem(self.lines[c], self.data_frames[self.section_name_mode][i].name)
                 c += 1
                 color_i += 1
@@ -437,10 +529,14 @@ class AmplitudeTimeGraphWidget(AbstractQtGraphWidget):
                 minmaxes = {'x': [min(self.data_frames[key][i].data['x']), max(self.data_frames[key][i].data['x'])],
                             'y': [min(self.data_frames[key][i].data['ry' if self.is_relative else "y"]),
                                   max(self.data_frames[key][i].data['ry' if self.is_relative else "y"])]}
-                range_list['x'][0] = minmaxes['x'][0] if range_list['x'][0] is None else min(minmaxes['x'][0], range_list['x'][0])
-                range_list['x'][1] = minmaxes['x'][1] if range_list['x'][1] is None else max(minmaxes['x'][1], range_list['x'][1])
-                range_list['y'][0] = minmaxes['y'][0] if range_list['y'][0] is None else min(minmaxes['y'][0], range_list['y'][0])
-                range_list['y'][1] = minmaxes['y'][1] if range_list['y'][1] is None else max(minmaxes['y'][1], range_list['y'][1])
+                range_list['x'][0] = minmaxes['x'][0] if range_list['x'][0] is None else min(minmaxes['x'][0],
+                                                                                             range_list['x'][0])
+                range_list['x'][1] = minmaxes['x'][1] if range_list['x'][1] is None else max(minmaxes['x'][1],
+                                                                                             range_list['x'][1])
+                range_list['y'][0] = minmaxes['y'][0] if range_list['y'][0] is None else min(minmaxes['y'][0],
+                                                                                             range_list['y'][0])
+                range_list['y'][1] = minmaxes['y'][1] if range_list['y'][1] is None else max(minmaxes['y'][1],
+                                                                                             range_list['y'][1])
                 print(c, key, i, self.data_frames, self.dict_data_x, sep='\n')
                 if c >= len(self.lines):
                     self.lines.append(self.plot(self.data_frames[key][i].data["x"],
@@ -493,11 +589,17 @@ class DepthResponseGraphWidget(AbstractQtGraphWidget):
             if color_i >= len(cf.COLOR_NAMES):
                 color_i = 0
             data_y_list = [section_depth + 8, section_depth]
-            range_list['y'][0] = min(data_y_list[1] if range_list['y'][0] is None else range_list['y'][0], data_y_list[1])
-            range_list['y'][1] = max(data_y_list[0] if range_list['y'][1] is None else range_list['y'][1], data_y_list[0])
-            data_x_list = [self.data_frames[self.step_num][section_depth][self.mean_mode if self.mean_mode < 0 else self.sensor_num]['rx' if self.is_relative else "x"]] * 2
-            range_list['x'][0] = min(data_x_list[0] if range_list['x'][0] is None else range_list['x'][0], data_x_list[0])
-            range_list['x'][1] = max(data_x_list[1] if range_list['x'][1] is None else range_list['x'][1], data_x_list[1])
+            range_list['y'][0] = min(data_y_list[1] if range_list['y'][0] is None else range_list['y'][0],
+                                     data_y_list[1])
+            range_list['y'][1] = max(data_y_list[0] if range_list['y'][1] is None else range_list['y'][1],
+                                     data_y_list[0])
+            data_x_list = [self.data_frames[self.step_num][section_depth][
+                               self.mean_mode if self.mean_mode < 0 else self.sensor_num][
+                               'rx' if self.is_relative else "x"]] * 2
+            range_list['x'][0] = min(data_x_list[0] if range_list['x'][0] is None else range_list['x'][0],
+                                     data_x_list[0])
+            range_list['x'][1] = max(data_x_list[1] if range_list['x'][1] is None else range_list['x'][1],
+                                     data_x_list[1])
             if c >= len(self.lines):
                 self.lines.append(self.plot(data_x_list, data_y_list, pen=mkPen(cf.COLOR_NAMES[color_i], width=5)))
             else:
@@ -551,7 +653,6 @@ class DepthResponseGraphWidget(AbstractQtGraphWidget):
             return closest_x, closest_y
 
 
-
 # MATPLOTLIB GRAPH
 class MplCanvas(FigureCanvasQTAgg):
     def __init__(self):
@@ -568,6 +669,11 @@ class MplCanvas(FigureCanvasQTAgg):
         angle_and_name_list = self.sensor_name_list.copy()
         for i in range(len(angle_and_name_list)):
             angle_and_name_list[i] = str(45 * i) + '° ' + angle_and_name_list[i]
+        # Устанавливаем фиксированные деления на оси X
+        ticks = range(len(angle_and_name_list))  # Количество делений равно количеству меток
+        self.ax.set_xticks(ticks)
+
+        # Устанавливаем метки для делений
         self.ax.set_xticklabels(angle_and_name_list)
         self.ax.set_ylim(0, top_y_lim_)
 

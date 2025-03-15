@@ -15,7 +15,7 @@ from graph_widget import OscilloscopeGraphWidget, AmplitudeTimeGraphWidget, \
     FrequencyResponseGraphWidget, WindRoseGraphWidget, DepthResponseGraphWidget
 from third_party import AbstractFunctor, HelpInfoDialog, SimpleItemListWidget, \
     select_path_to_files, select_path_to_dir, ListWidget, AbstractWindowWidget, \
-    MyCheckBox, ButtonWidget, MessageBox, get_last_project_path, AbstractToolDialog, FrequencyFilterDialog
+    MyCheckBox, ButtonWidget, MessageBox, get_last_project_path, AbstractToolDialog, FrequencyFilterDialog, AxisXDialog
 from loadlabel import loading
 from borehole_logic import *
 from converter import ConverterDialog
@@ -971,6 +971,7 @@ class AbstractGraphWindowWidget(AbstractWindowWidget):
         self.hide_line_dialog = HideLineToolDialog(self)
         self.help_info_dialog = HelpInfoDialog(self)
         self.filter_dialog = FrequencyFilterDialog(self)
+        self.axis_dialog=AxisXDialog(self)
 
         self.menu_bar = QMenuBar(self)
         self.menu_bar.addSeparator()
@@ -995,16 +996,21 @@ class AbstractGraphWindowWidget(AbstractWindowWidget):
         hide_lines_action_btn = self.tools_menu_btn.addAction('Отображение линий')
         self.filter_btn = self.tools_menu_btn.addAction('Фильтр частот')
         self.filter_btn.setVisible(isinstance(self, OscilloscopeGraphWindowWidget))
+        self.axis_btn=self.tools_menu_btn.addAction('Настройка оси X')
+        self.axis_btn.setVisible(isinstance(self, FrequencyResponseGraphWindowWidget))
 
         tools_save_action_btn.triggered.connect(self.save_data_by_default_action)
         tools_save_as_action_btn.triggered.connect(self.save_data_by_select_action)
         hide_lines_action_btn.triggered.connect(self.run_hide_line_dialog_action)
         self.filter_btn.triggered.connect(self.filter_oscilloscope)
+        self.axis_btn.triggered.connect(self.axis_frequency)
+
 
     def activate(self, is_active_: bool = True) -> None:
         self.hide_line_dialog.close()
         self.setVisible(is_active_)
         self.filter_btn.setVisible(isinstance(self, OscilloscopeGraphWindowWidget))
+        self.axis_btn.setVisible(isinstance(self, FrequencyResponseGraphWindowWidget))
 
     def plot_graph_action(self) -> None:
         ...
@@ -1044,6 +1050,11 @@ class AbstractGraphWindowWidget(AbstractWindowWidget):
         """Открывает диалоговое окно для настройки фильтра."""
         # self.filter_dialog = FrequencyFilterDialog(self)
         self.filter_dialog.show()
+
+    def axis_frequency(self):
+        """Открывает диалоговое окно для настройки фильтра."""
+        # self.filter_dialog = FrequencyFilterDialog(self)
+        self.axis_dialog.show()
 
 
 class CheckBoxHideFunctor(AbstractFunctor):
@@ -1563,6 +1574,20 @@ class FrequencyResponseGraphWindowWidget(AbstractGraphWindowWidget):
         core_layout.addWidget(self.plot_widget)
         core_layout.addWidget(self.pipe_widget)
         self.setLayout(core_layout)
+
+    def axis_frequency(self):
+        """Открывает диалоговое окно для настройки оси X."""
+        self.axis_dialog = AxisXDialog(self)
+        self.axis_dialog.show()
+
+    def apply_axis_x_values(self, start_value: float, step_value: float):
+        """
+        Применяет начальное значение и шаг по оси X к графику.
+        :param start_value: Начальное значение по оси X.
+        :param step_value: Шаг по оси X.
+        """
+        if self.plot_widget:
+            self.plot_widget.update_axis_x(start_value, step_value)
 
     def activate(self, is_active_: bool = True) -> None:
         self.cracks_dialog.close()

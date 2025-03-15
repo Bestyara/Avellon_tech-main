@@ -8,6 +8,7 @@ from PySide6.QtGui import QMovie, QDoubleValidator
 import config as cf
 
 
+
 class MyWarning(Warning):
     def __init__(self, exception_title_: str, message_: str):
         self.message = message_
@@ -406,6 +407,66 @@ class FrequencyFilterDialog(QDialog):
         cutoff = self.cutoff_frequency_input.text()
         print(f"Применяется фильтр нижних частот с частотой среза: {cutoff} Гц")
         self.close()  # Закрываем окно после применения фильтра
+
+
+
+class AxisXDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Настройка оси X")
+        self.setFixedSize(300, 200)
+
+        # Валидатор для начального значения и шага (отрицательные значения допустимы, 2 знака после запятой)
+        validator = QDoubleValidator(-999999.99, 999999.99, 2)
+
+        # Основной layout
+        layout = QVBoxLayout()
+
+        # Метка с инструкцией для начального значения
+        label_start = QLabel("Введите начальное значение по оси X:")
+        layout.addWidget(label_start)
+        # Поле для ввода начального значения
+        self.start_value_input = QLineEdit(self)
+        self.start_value_input.setValidator(validator)
+        layout.addWidget(self.start_value_input)
+
+        # Метка с инструкцией для шага
+        label_step = QLabel("Введите шаг по оси X:")
+        layout.addWidget(label_step)
+
+        # Поле для ввода шага
+        self.step_value_input = QLineEdit(self)
+        self.step_value_input.setValidator(validator)
+        layout.addWidget(self.step_value_input)
+
+        # Кнопка для подтверждения
+        confirm_button = QPushButton("Применить")
+        confirm_button.clicked.connect(self.apply_values)
+        layout.addWidget(confirm_button)
+
+        self.setLayout(layout)
+
+    def apply_values(self):
+        """
+        Применяет введенные значения и закрывает окно.
+        """
+        try:
+            # Получаем начальное значение и шаг из полей ввода
+            start_value = float(self.start_value_input.text())
+            step_value = float(self.step_value_input.text())
+
+            # Передаем значения в родительский виджет
+            self.parent().apply_axis_x_values(start_value, step_value)
+
+            # Закрываем окно после применения значений
+            self.close()
+        except ValueError:
+            print("Ошибка: введите корректные значения для начального значения и шага.")
+
+
+
+
+
 # class FrequencyFilterDialog(QDialog):
 #     def __init__(self, parent=None):
 #         super().__init__(parent)

@@ -1,4 +1,3 @@
-
 class AbstractFormatting:
     def __init__(self, unit_list_: list):
         self.content = ''
@@ -21,7 +20,8 @@ class AbstractFormatting:
             raise Warning('')
         return None
 
-    def get(self, content_: str): ...
+    def get(self, content_: str):
+        ...
 
 
 class IntFormatting(AbstractFormatting):
@@ -40,4 +40,3 @@ class StrFormatting(AbstractFormatting):
     def get(self, content_: str) -> str:
         self.unit_separator(content_)
         return str(content_[:self.unit_index])
-        
