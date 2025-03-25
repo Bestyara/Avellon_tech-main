@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import QGraphicsView
 from scipy.signal import butter, filtfilt
 
 
+
 class AbstractDataFrame:
     def __init__(self, name_: str, parent_: QWidget = None):
         self.name = name_
@@ -139,7 +140,6 @@ class MaxesDataFrame(AbstractDataFrame):
             x_dataframe['x'].append(i)
         return x_dataframe
 
-
 class MinDataFrame(AbstractDataFrame):
     def __init__(self, name_: str, mins_: list, parent_: QWidget = None, min_value_: float = None, **kwargs):
         super().__init__(name_, parent_)
@@ -176,7 +176,6 @@ class MinDataFrame(AbstractDataFrame):
         for i in range(start_point_, start_point_ + data_points_ * step_, step_):
             x_dataframe['x'].append(i)
         return x_dataframe
-
 
 class AbstractQtGraphWidget(PlotWidget):
     def __init__(self, data_frames_, parent_: QWidget = None):
@@ -421,8 +420,7 @@ class FrequencyResponseGraphWidget(AbstractQtGraphWidget):
             self.annot.setPos(closest_point[0], closest_point[1])
 
             # Изменение цвета и стиля текста через HTML
-            self.annot.setHtml(
-                f'<span style="color: #FF0000; font-size: 12pt;">f={closest_point[0]:.2f} кГц, U={closest_point[1]:.2f} мВ</span>')
+            self.annot.setHtml(f'<span style="color: #FF0000; font-size: 12pt;">f={closest_point[0]:.2f} кГц, U={closest_point[1]:.2f} мВ</span>')
 
             self.annot.show()
         else:
@@ -434,6 +432,8 @@ class FrequencyResponseGraphWidget(AbstractQtGraphWidget):
         :param start_value: Начальное значение по оси X.
         :param step_value: Шаг по оси X.
         """
+        print(
+            f"Обновление оси X в FrequencyResponseGraphWidget: start={start_value}, step={step_value}")  # Отладочное сообщение
         for key in self.data_frames.keys():
             for dataframe in self.data_frames[key]:
                 if dataframe.active:
@@ -453,15 +453,64 @@ class FrequencyResponseGraphWidget(AbstractQtGraphWidget):
         Перестраивает график на основе обновленных данных.
         """
         print("Recreating graph...")  # Отладочное сообщение
-        print(f"Data frames: {data_frames}")  # Отладочное сообщение
         # Очищаем только линии графика
         for line in self.lines:
-            print(f"Removing line: {line}")  # Отладочное сообщение
             self.removeItem(line)
         self.lines = []
         self.plotted_points = []
-        self.graph_init()  # Инициализируем график заново
+        self.graph_init_new()  # Инициализируем график заново
 
+    def graph_init_new(self) -> None:
+        """
+        Инициализирует график на основе обновленных данных.
+        """
+        self.legend.clear()
+        if len(self.data_frames.keys()) < 1:
+            return
+
+        color_i, c = 0, 0
+
+        x_min, x_max = float('inf'), float('-inf')  # Для вычисления диапазона оси X
+        y_min, y_max = float('inf'), float('-inf')  # Для вычисления диапазона оси Y
+
+        for key in self.data_frames.keys():
+            for i in range(len(self.data_frames[key])):
+                y_data = self.data_frames[key][i].data["y"]
+                y_data = [abs(y) for y in y_data]
+                if color_i >= len(cf.COLOR_NAMES):
+                    color_i = 0
+                len_data = len(self.data_frames[key][i].data["y"])
+
+                # Используем обновленные данные по оси X
+                x_data = self.data_frames[key][i].data.get('x', [])
+                if not x_data:  # Если данные по оси X отсутствуют, пропускаем
+                    print(f"Ошибка: данные по оси X отсутствуют для {self.data_frames[key][i].name}")
+                    continue
+
+                # Обновляем диапазоны осей
+                x_min = min(x_min, min(x_data))
+                x_max = max(x_max, max(x_data))
+                y_min = min(y_min, min(y_data))
+                y_max = max(y_max, max(y_data))
+
+                # Добавляем линию графика
+                if c >= len(self.lines):
+                    self.lines.append(self.plot(x_data, y_data, pen=mkPen(cf.COLOR_NAMES[color_i], width=3)))
+                elif self.data_frames[key][i].active:
+                    self.lines[c].setData(x_data, y_data)
+
+                # Сохраняем данные точек для дальнейшей обработки при наведении
+                self.plotted_points.append((x_data, y_data))
+
+                self.legend.addItem(self.lines[c], self.data_frames[key][i].name)
+                c += 1
+                color_i += 1
+
+        # Устанавливаем диапазоны осей
+        if x_min != float('inf') and x_max != float('-inf'):
+            self.setXRange(x_min, x_max)
+        if y_min != float('inf') and y_max != float('-inf'):
+            self.setYRange(y_min, y_max)
 
 class AmplitudeTimeGraphWidget(AbstractQtGraphWidget):
     def __init__(self, data_frames_: dict, parent_: QWidget = None):
