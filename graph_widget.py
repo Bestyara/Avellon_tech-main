@@ -90,7 +90,12 @@ class XYDataFrame(AbstractDataFrame):
         if not self.is_correct_read():
             return
         self.data = self.data.drop(index=[0, 1, 2, 3, 4, 5])
-        self.data = {'y': self.data[0].astype(float).values.tolist()}
+        y_data = self.data[0].astype(float).values.tolist()
+        # Рассчитываем среднее значение (состояние равновесия)
+        self.mean_y = round(sum(y_data) / len(y_data), 1) if y_data else 0
+        # Сохраняем оригинальные данные
+        self.data = {'y': [round(y + abs(self.mean_y), 1) for y in y_data]}
+        # Корректируем минимумы и максимумы
         self.max_y = max(self.data['y'])
         self.min_y = min(self.data['y'])
 
@@ -110,10 +115,7 @@ class MaxesDataFrame(AbstractDataFrame):
         if 'x_list' in kwargs:
             self.data['x'] = kwargs['x_list']
         self.max_value = None
-
         self.data_init(max_value_)
-        # print(self.data)
-
         self.tmp_value = None
 
     def max(self, max_value_: float = None) -> float:
@@ -124,6 +126,9 @@ class MaxesDataFrame(AbstractDataFrame):
         return self.max_value
 
     def data_init(self, max_value_: float = None) -> None:
+        # mean_max = round(sum(self.data['y']) / len(self.data['y']),1) if self.data['y'] else 0
+        # self.data['y'] = [x + abs(mean_max) for x in self.data['y']]
+        # # Обновляем относительные значения
         self.compute_relative_data(max_value_)
 
     def compute_relative_data(self, max_value_: float = None) -> None:
@@ -147,10 +152,7 @@ class MinDataFrame(AbstractDataFrame):
         if 'x_list' in kwargs:
             self.data['x'] = kwargs['x_list']
         self.min_value = None
-
         self.data_init(min_value_)
-        # print(self.data)
-
         self.tmp_value = None
 
     def min(self, min_value_: float = None) -> float:
@@ -276,10 +278,6 @@ class OscilloscopeGraphWidget(AbstractQtGraphWidget):
             for i in range(len(self.data_frames[key])):
                 # Вычисляем среднее значение оси Y для текущего набора данных
                 y_data = self.data_frames[key][i].data["y"]
-                mean_y = sum(y_data) / len(y_data) if len(y_data) > 0 else 0
-                # Если состояние равновесия (mean_y) не равно нулю, корректируем данные
-                if mean_y != 0:
-                    y_data = [y - mean_y for y in y_data]  # Сдвигаем данные оси Y
                 if color_i >= len(cf.COLOR_NAMES):
                     color_i = 0
                 if c >= len(self.lines):
@@ -373,11 +371,11 @@ class FrequencyResponseGraphWidget(AbstractQtGraphWidget):
         color_i, c = 0, 0
         for key in self.data_frames.keys():
             for i in range(len(self.data_frames[key])):
-                y_data = self.data_frames[key][i].data["y"]
+                y_data = self.data_frames[key][i].data['y']
                 y_data = [abs(y) for y in y_data]
                 if color_i >= len(cf.COLOR_NAMES):
                     color_i = 0
-                len_data = len(self.data_frames[key][i].data["y"])
+                len_data = len(self.data_frames[key][i].data['y'])
 
                 if len_data not in self.dict_data_x:
                     self.dict_data_x[len_data] = MaxesDataFrame.get_data_x(len_data, 4, 2)
