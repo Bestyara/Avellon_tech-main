@@ -1586,6 +1586,7 @@ class FrequencyResponseGraphWindowWidget(AbstractGraphWindowWidget):
         :param start_value: Начальное значение по оси X.
         :param step_value: Шаг по оси X.
         """
+        print(f"Применение значений в FrequencyResponseGraphWindowWidget: start={start_value}, step={step_value}")  # Отладочное сообщение
         if self.plot_widget:
             self.plot_widget.update_axis_x(start_value, step_value)
 
@@ -1610,6 +1611,8 @@ class FrequencyResponseGraphWindowWidget(AbstractGraphWindowWidget):
     def run_crack_dialog_action(self) -> None:
         self.cracks_dialog.run()
         self.pipe_widget.update()
+
+
 
 
 # ---------------- AmplitudeTime ----------------
