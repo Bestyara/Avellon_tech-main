@@ -416,8 +416,8 @@ class AxisXDialog(QDialog):
         self.setWindowTitle("Настройка оси X")
         self.setFixedSize(300, 200)
 
-        # Валидатор для начального значения и шага (отрицательные значения допустимы, 2 знака после запятой)
-        validator = QDoubleValidator(-999999.99, 999999.99, 2)
+        # Валидатор для начального значения и шага (только положительные значения, 2 знака после запятой)
+        validator = QDoubleValidator(0.0, 999999.99, 2)
 
         # Основной layout
         layout = QVBoxLayout()
@@ -449,22 +449,27 @@ class AxisXDialog(QDialog):
     def apply_values(self):
         """
         Применяет введенные значения и закрывает окно.
+        Проверяет, что введены корректные положительные числа.
         """
         try:
             # Получаем начальное значение и шаг из полей ввода
             start_value = float(self.start_value_input.text())
             step_value = float(self.step_value_input.text())
 
-            # Передаем значения в родительский виджет
-            self.parent().apply_axis_x_values(start_value, step_value)
+            # Проверка на корректность ввода (значения должны быть больше нуля)
+            if start_value < 0 or step_value < 0:
+                print("Ошибка: начальное значение и шаг должны быть больше нуля.")
+                return
+
+            # Передаем значения в родительский виджет, если он существует
+            if self.parent() and hasattr(self.parent(), 'apply_axis_x_values'):
+                print(f"Передача значений в родительский виджет: start={start_value}, step={step_value}")  # Отладочное сообщение
+                self.parent().apply_axis_x_values(start_value, step_value)
 
             # Закрываем окно после применения значений
             self.close()
         except ValueError:
-            print("Ошибка: введите корректные значения для начального значения и шага.")
-
-
-
+            print("Ошибка: введите корректные числовые значения для начального значения и шага.")
 
 
 # class FrequencyFilterDialog(QDialog):
