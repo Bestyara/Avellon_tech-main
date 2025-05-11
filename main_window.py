@@ -430,7 +430,7 @@ class BoreHoleMenuWidget(AbstractWindowWidget):
         super().__init__(borehole_window_)
         self.borehole_window = borehole_window_
         self.name = name_
-        self.label = QLabel("Скважина: " + self.name, self)
+        self.label = QLabel("Проект: " + self.name, self)
         self.__label_init()
 
         self.button_list = SimpleItemListWidget(ButtonWidget, self)
@@ -492,7 +492,7 @@ class BoreHoleDialog(AbstractToolDialog):
 
         self.section_list_widget = ListWidget(self)
 
-        self.add_button = QPushButton("+ Добавить секцию", self)
+        self.add_button = QPushButton("+ Добавить скважину", self)
         self.add_button.clicked.connect(self.add_section_action)
 
         self.accept_button = QPushButton("Принять", self)
@@ -664,6 +664,18 @@ class FileWidget(AbstractBoreholeDialogItemWidget):
         if os.path.isfile(self.path):
             shutil.copy2(self.path, step_dir_path_)
 
+class IndicatorLabel(QLabel):
+    def __init__(self, color="green", diameter=12):
+        super().__init__()
+        self.setFixedSize(diameter, diameter)
+        self.set_color(color)
+
+    def set_color(self, color):
+        self.setStyleSheet(f"""
+            background-color: {color};
+            border-radius: {self.width() // 2}px;
+            border: 1px solid black;
+        """)
 
 class StepWidget(AbstractBoreholeDialogItemWidget):
     def __init__(self, number_: int, parent_list_: ListWidget, id_: str = None, is_show_: bool = False):
@@ -706,11 +718,12 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         tmp_layout = QHBoxLayout()
         tmp_layout.addWidget(self.checkbox)
         flo = QFormLayout()
-        flo.addRow("Шаг №", self.number_editor)
+        flo.addRow("Сегмент №", self.number_editor)
         tmp_layout.addLayout(flo)
         tmp_layout.addWidget(self.add_button)
         tmp_layout.addWidget(self.drop_button)
         tmp_layout.addWidget(self.delete_button)
+        tmp_layout.addWidget(IndicatorLabel("green"))
 
         core_layout = QVBoxLayout()
         core_layout.addLayout(tmp_layout)
