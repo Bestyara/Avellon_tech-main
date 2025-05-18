@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QWidget, QCheckBox, QVBoxLayout, QHBoxLayout, QMes
 from PySide6.QtCore import Qt, QUrl, QPoint, QSize, QRect, QRunnable, QThreadPool, Signal, QObject
 from PySide6.QtGui import QMovie, QDoubleValidator
 import config as cf
+import psycopg2
 
 
 class MyWarning(Warning):
@@ -61,6 +62,20 @@ def get_num_file_by_default(base_name_: str, sensor_amount_: int) -> list:
         return [-1, -1]
     return [measurement_num, sensor_num]
 
+def get_values_from_postgres(query):
+    conn = psycopg2.connect(
+        dbname="Avellon_v8",
+        user="postgres",
+        password="postgres",
+        host="localhost",
+        port=5432
+    )
+    cur = conn.cursor()
+    cur.execute(query)
+    result = [row[0] for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return result
 
 class AbstractFunctor:
     def action(self, state_: int) -> None: ...

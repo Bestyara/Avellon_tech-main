@@ -5,7 +5,7 @@ from uuid import uuid4
 from time import gmtime, strftime
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QCheckBox, \
     QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QFormLayout, QLayout, QMenuBar, \
-    QTableWidget, QTableWidgetItem, QLabel, QSlider, QLineEdit, QComboBox
+    QTableWidget, QTableWidgetItem, QLabel, QSlider, QLineEdit, QComboBox, QTextEdit
 from PySide6.QtGui import QScreen, QIcon, QPixmap, QIntValidator, QDoubleValidator, QPainter, QPen
 from PySide6.QtCore import Qt, QPoint, QSize, QRect, QLine
 from PySide6.QtWidgets import QAbstractItemView
@@ -13,11 +13,13 @@ from graph_widget import OscilloscopeGraphWidget, AmplitudeTimeGraphWidget, \
     FrequencyResponseGraphWidget, WindRoseGraphWidget, DepthResponseGraphWidget
 from third_party import AbstractFunctor, HelpInfoDialog, SimpleItemListWidget, \
     select_path_to_files, select_path_to_dir, ListWidget, AbstractWindowWidget, \
-    MyCheckBox, ButtonWidget, MessageBox, get_last_project_path, AbstractToolDialog, FrequencyFilterDialog
+    MyCheckBox, ButtonWidget, MessageBox, get_last_project_path, AbstractToolDialog, FrequencyFilterDialog, \
+    get_values_from_postgres
 from loadlabel import loading
 from borehole_logic import *
 from converter import ConverterDialog
 import config as cf
+import psycopg2
 
 
 # DONE 0) get XYDataFrame in Borehole
@@ -67,6 +69,14 @@ import config as cf
 class MainWindow(QMainWindow):
     def __init__(self, app_: QApplication):
         super().__init__()
+        # Подключение к базе данных PostgreSQL
+        self.connection = psycopg2.connect(
+            host="localhost",
+            database="Avellon_v8",
+            user="postgres",
+            password="postgres",
+            port="5432"
+        )
         self.app = app_
         mb = MessageBox()
         self.__window_init()
@@ -99,7 +109,7 @@ class MainWindow(QMainWindow):
 
     def run_borehole_menu(self, project_path: str) -> None:
         self.__cache_save(project_path)
-        self.setCentralWidget(BoreholeMenuWindowWidget(project_path, self))
+        self.setCentralWidget(BoreholeMenuWindowWidget(project_path, self.connection, self))
 
     def exit(self) -> None:
         self.app.exit()
@@ -343,7 +353,7 @@ class BoreholeMenuWindowWidget(QWidget):
         def __view_menu_init(self) -> None:
             pass
 
-    def __init__(self, path_: str, main_window_: MainWindow):
+    def __init__(self, path_: str, connection, main_window_: MainWindow):
         super().__init__(main_window_)
         self.id = uuid4()
         if path_ is None or len(os.path.basename(path_)) < 1:
@@ -353,9 +363,10 @@ class BoreholeMenuWindowWidget(QWidget):
         self.name = os.path.basename(path_)
         self.main_window = main_window_
         self.main_window.setWindowTitle(self.name + " - скважина")
+        self.connection = connection
 
         self.borehole = Borehole(self.name, str(pathlib.Path(path_).parent))
-        self.borehole_dialog = BoreHoleDialog(self.borehole, self)
+        self.borehole_dialog = BoreHoleDialog(self.connection, self.borehole, self)
         self.converter_dialog = ConverterDialog(self)
 
         self.borehole_menu_widget = BoreHoleMenuWidget(self.name, self)
@@ -484,11 +495,14 @@ class BoreHoleMenuWidget(AbstractWindowWidget):
 
 
 class BoreHoleDialog(AbstractToolDialog):
-    def __init__(self, borehole_: Borehole, parent_: QWidget = None):
+    def __init__(self, connection, borehole_: Borehole, parent_: QWidget = None):
         super().__init__(cf.BOREHOLE_SETTINGS_DIALOG_TITLE, parent_)
         self.borehole = borehole_
         self.setWindowModality(Qt.ApplicationModal)
         self.setMinimumSize(800, 500)
+
+        self.connection = connection
+        self.cur = self.connection.cursor()
 
         self.section_list_widget = ListWidget(self)
 
@@ -545,6 +559,10 @@ class BoreHoleDialog(AbstractToolDialog):
                     os.remove(filename)
         for section in self.section_list_widget.widget_list:
             section.save_all(borehole_path)
+            # self.cur.execute(
+            #     f"INSERT INTO boreholes(name, length, depth) VALUES({section.name}, {section.depth}, {section.length});"
+            # )
+            # self.connection.commit()
 
     @loading('cancel_action')
     def accept_action(self) -> None:
@@ -588,32 +606,80 @@ class BoreHoleDialog(AbstractToolDialog):
                 if section.name == section_w.name:
                     section.depth = section_w.depth
                     section.length = section_w.length
+
         print('______________________________')
         self.borehole.save_info_to_file()
 
+
     def run(self) -> None:
         self.section_list_widget.remove_all()
-        for section in self.borehole.section_list:
-            self.add_section(section.name, section.depth, section.length, section.id)
+
+        cur = self.connection.cursor()
+        cur.execute(
+            "SELECT * from boreholes;"
+        )
+        boreholes = cur.fetchall()
+
+        for borehole in boreholes:
+            borehole_id = borehole[0]
+            borehole_name = borehole[1]
+            borehole_depth = borehole[2]
+            borehole_length = borehole[3]
+            self.add_section(borehole_name, borehole_depth, borehole_length, borehole_id)
             section_w = self.section_list_widget.widget_list[len(self.section_list_widget.widget_list) - 1]
-            section_w.checkbox.setChecked(section.is_select)
-            for step in section.step_list:
-                section_w.add_step(step.number, step.id)
-                step_w = section_w.step_list.widget_list[len(section_w.step_list.widget_list) - 1]
-                step_w.checkbox.setChecked(step.is_select)
-                for file in step.data_list:
-                    step_w.add_file(file.name, file.id)
-                    step_w.file_list.widget_list[len(step_w.file_list.widget_list) - 1] \
-                        .checkbox.setChecked(file.is_select)
-        print('______________________________')
-        print("IN:", self.borehole.path())
-        for section in self.borehole.section_list:
-            print('sec\t', section.path())
-            for step in section.step_list:
-                print('\tstep\t', step.path())
-                for file in step.data_list:
-                    print('\t\tf\t', file.path())
-        print('______________________________')
+            cur.execute(
+                f"SELECT * from segments WHERE borehole_id = {borehole_id};"
+            )
+            segments = cur.fetchall()
+            for segment in segments:
+                segment_id = segment[0]
+                segment_fissure_inside = segment[3]
+                section_w.add_step(segment_id, segment_id)
+
+
+        # for section in self.borehole.section_list:
+        #     self.add_section(section.name, section.depth, section.length, section.id)
+        #     section_w = self.section_list_widget.widget_list[len(self.section_list_widget.widget_list) - 1]
+        #     section_w.checkbox.setChecked(section.is_select)
+        #     for step in section.step_list:
+        #         section_w.add_step(step.number, step.id)
+        #         step_w = section_w.step_list.widget_list[len(section_w.step_list.widget_list) - 1]
+        #         step_w.checkbox.setChecked(step.is_select)
+        #         for file in step.data_list:
+        #             step_w.add_file(file.name, file.id)
+        #             step_w.file_list.widget_list[len(step_w.file_list.widget_list) - 1] \
+        #                 .checkbox.setChecked(file.is_select)
+        # print('______________________________')
+        # print("IN:", self.borehole.path())
+        # for section in self.borehole.section_list:
+        #     print('sec\t', section.path())
+        #     for step in section.step_list:
+        #         print('\tstep\t', step.path())
+        #         for file in step.data_list:
+        #             print('\t\tf\t', file.path())
+        # print('______________________________')
+
+        # for section in self.borehole.section_list:
+        #     self.add_section(section.name, section.depth, section.length, section.id)
+        #     section_w = self.section_list_widget.widget_list[len(self.section_list_widget.widget_list) - 1]
+        #     section_w.checkbox.setChecked(section.is_select)
+        #     for step in section.step_list:
+        #         section_w.add_step(step.number, step.id)
+        #         step_w = section_w.step_list.widget_list[len(section_w.step_list.widget_list) - 1]
+        #         step_w.checkbox.setChecked(step.is_select)
+        #         for file in step.data_list:
+        #             step_w.add_file(file.name, file.id)
+        #             step_w.file_list.widget_list[len(step_w.file_list.widget_list) - 1] \
+        #                 .checkbox.setChecked(file.is_select)
+        # print('______________________________')
+        # print("IN:", self.borehole.path())
+        # for section in self.borehole.section_list:
+        #     print('sec\t', section.path())
+        #     for step in section.step_list:
+        #         print('\tstep\t', step.path())
+        #         for file in step.data_list:
+        #             print('\t\tf\t', file.path())
+        # print('______________________________')
 
         self.exec()
 
@@ -693,6 +759,7 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
 
         self.add_button = QPushButton('+', self)
         self.drop_button = QPushButton('▽', self)
+        self.add_defect_button = QPushButton('Добавить дефект', self)
         self.__button_init()
         self.is_dropped = True
         self.drop_list_action()
@@ -714,6 +781,8 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         self.drop_button.setMaximumWidth(20)
         self.drop_button.clicked.connect(self.drop_list_action)
 
+        self.add_defect_button.clicked.connect(self.show_defect_dialog)
+
     def __all_widgets_to_layout(self) -> None:
         tmp_layout = QHBoxLayout()
         tmp_layout.addWidget(self.checkbox)
@@ -724,6 +793,7 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         tmp_layout.addWidget(self.drop_button)
         tmp_layout.addWidget(self.delete_button)
         tmp_layout.addWidget(IndicatorLabel("green"))
+        tmp_layout.addWidget(self.add_defect_button)
 
         core_layout = QVBoxLayout()
         core_layout.addLayout(tmp_layout)
@@ -781,6 +851,10 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
     def drop_list_action(self) -> None:
         self.__drop_list(not self.is_dropped)
 
+    def show_defect_dialog(self) -> None:
+        defect_dialog = DefectDialog()
+        defect_dialog.exec_()
+
     def save_all(self, section_path_: str) -> None:
         step_path = section_path_ + '/' + str(self.number)
         if not os.path.isdir(step_path):
@@ -800,6 +874,71 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         for file in self.file_list.widget_list:
             file.copy_to(step_path)
 
+class DefectDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Добавление дефекта")
+        self.resize(400, 300)
+
+        # --- Сектор ---
+        sector_label = QLabel("Сектор:")
+        self.sector_combo = QComboBox()
+        self.sector_combo.addItems(get_values_from_postgres("SELECT sector_code FROM sectors"))
+
+        sector_layout = QHBoxLayout()
+        sector_layout.addWidget(sector_label)
+        sector_layout.addWidget(self.sector_combo)
+
+        # --- Объект контроля ---
+        control_object_label = QLabel("Объект контроля:")
+        self.control_object_combo = QComboBox()
+        self.control_object_combo.addItems(get_values_from_postgres("SELECT object_name FROM control_objects"))
+
+        control_object_layout = QHBoxLayout()
+        control_object_layout.addWidget(control_object_label)
+        control_object_layout.addWidget(self.control_object_combo)
+
+        # --- Тип дефекта ---
+        defect_label = QLabel("Тип дефекта:")
+        self.defect_combo = QComboBox()
+        self.defect_combo.addItems(get_values_from_postgres("SELECT type_name FROM defect_types"))
+
+        defect_layout = QHBoxLayout()
+        defect_layout.addWidget(defect_label)
+        defect_layout.addWidget(self.defect_combo)
+
+        # --- Степень критичности ---
+        criticality_degree_label = QLabel("Степень критичности:")
+        self.criticality_degree_combo = QComboBox()
+        self.criticality_degree_combo.addItems(get_values_from_postgres("SELECT criticality_name FROM criticality_degrees"))
+
+        criticality_degree_layout = QHBoxLayout()
+        criticality_degree_layout.addWidget(criticality_degree_label)
+        criticality_degree_layout.addWidget(self.criticality_degree_combo)
+
+        # --- Комментарий ---
+        comment_label = QLabel("Комментарий:")
+        self.comment_text = QTextEdit()
+
+        # --- Кнопка OK ---
+        ok_button = QPushButton("Добавить")
+        ok_button.clicked.connect(self.accept)
+
+        # --- Основной layout ---
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(sector_layout)
+        main_layout.addLayout(defect_layout)
+        main_layout.addLayout(control_object_layout)
+        main_layout.addLayout(criticality_degree_layout)
+        # main_layout.addLayout(layout)
+        main_layout.addWidget(comment_label)
+        main_layout.addWidget(self.comment_text)
+        main_layout.addWidget(ok_button)
+
+        self.setLayout(main_layout)
+
+    def accept(self):
+        pass
 
 class SectionWidget(AbstractBoreholeDialogItemWidget):
     def __init__(self, name_: str, parent_list_: ListWidget, depth_: int = 0, length_: float = 0.,
@@ -863,6 +1002,7 @@ class SectionWidget(AbstractBoreholeDialogItemWidget):
         flo = QFormLayout()
         flo.addRow("Длина (м)", self.length_editor)
         base_layout.addLayout(flo)
+        base_layout.addWidget(IndicatorLabel("green"))
         base_layout.addWidget(self.add_button)
         base_layout.addWidget(self.drop_button)
         base_layout.addWidget(self.delete_button)
