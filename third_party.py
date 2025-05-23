@@ -421,6 +421,9 @@ class FrequencyFilterDialog(QDialog):
         cutoff = self.cutoff_frequency_input.text()
         print(f"Применяется фильтр нижних частот с частотой среза: {cutoff} Гц")
         self.close()  # Закрываем окно после применения фильтра
+
+
+
 # class FrequencyFilterDialog(QDialog):
 #     def __init__(self, parent=None):
 #         super().__init__(parent)

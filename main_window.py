@@ -284,6 +284,38 @@ class CreateProjectDialog(AbstractToolDialog):
         self.path_editor.path_editor.setText(self.parent_path + '/' + self.project_name)
         self.exec()
 
+class BackupRestoreWindow(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Резервное копирование и восстановление")
+        self.setFixedSize(300, 200)
+
+        layout = QVBoxLayout()
+
+        # Кнопка: Сохранить текущее состояние
+        self.backup_button = QPushButton()
+        self.backup_button.setFixedSize(180, 70)
+        self.backup_button.setText("Сохранить текущее\nсостояние системы")
+        self.backup_button.clicked.connect(self.perform_backup)
+        layout.addWidget(self.backup_button, alignment=Qt.AlignHCenter)
+
+        # Кнопка: Загрузить состояние из дампа
+        self.restore_button = QPushButton()
+        self.restore_button.setFixedSize(180, 70)
+        # self.restore_button.setWordWrap(True)
+        self.restore_button.setText("Загрузить\n состояние из дампа")
+        self.restore_button.clicked.connect(self.perform_restore)
+        layout.addWidget(self.restore_button, alignment=Qt.AlignHCenter)
+
+        self.setLayout(layout)
+
+    def perform_backup(self):
+        # TODO: Вызвать твой backup-скрипт
+        QMessageBox.information(self, "Бэкап", "Дамп базы данных создан")
+
+    def perform_restore(self):
+        # TODO: Вызвать твой restore-скрипт
+        QMessageBox.information(self, "Восстановление", "Состояние системы загружено из резервной копии")
 
 class DirPathEdit(QWidget):
     def __init__(self, parent_path_: str, name_: str, action_, parent_: QWidget = None):
@@ -325,6 +357,7 @@ class BoreholeMenuWindowWidget(QWidget):
             self.set_bore_action_btn = self.menu_bar.addAction('&Настроить скважину', 'Ctrl+a')
             self.select_graph_menu_btn = self.menu_bar.addMenu('Выбрать график')
             self.converter_action_btn = self.menu_bar.addAction('&Конвертер', 'Ctrl+k')
+            self.recovery_action_btn = self.menu_bar.addAction('Резервная копия')
             self.response_action_btn = self.menu_bar.addAction('&Выгрузить отчет', 'Ctrl+r')
             self.view_menu_btn = self.menu_bar.addMenu('Вид')
             self.back_main_menu_action_btn = self.menu_bar.addAction('В главное меню')
@@ -334,6 +367,7 @@ class BoreholeMenuWindowWidget(QWidget):
             self.set_bore_action_btn.triggered.connect(self.borehole_window.set_borehole_action)
             self.__select_graph_menu_init()
             self.converter_action_btn.triggered.connect(self.borehole_window.converter_action)
+            self.recovery_action_btn.triggered.connect(self.borehole_window.backup_action)
             self.response_action_btn.triggered.connect(self.borehole_window.response_action)
             self.__view_menu_init()
             self.back_main_menu_action_btn.triggered.connect(self.borehole_window.back_main_menu_action)
@@ -402,6 +436,10 @@ class BoreholeMenuWindowWidget(QWidget):
 
     def response_action(self) -> None:
         pass
+
+    def backup_action(self) -> None:
+        backup_dialog = BackupRestoreWindow()
+        backup_dialog.exec()
 
     def back_main_menu_action(self) -> None:
         self.main_window.menuBar().clear()
@@ -633,8 +671,13 @@ class BoreHoleDialog(AbstractToolDialog):
             segments = cur.fetchall()
             for segment in segments:
                 segment_id = segment[0]
+                segment_length_id = segment[2]
                 segment_fissure_inside = segment[3]
-                section_w.add_step(segment_id, segment_id)
+                cur.execute(
+                    f"SELECT * from segment_lengths WHERE segment_length_id = {segment_length_id};"
+                )
+                segment_length = cur.fetchall()
+                section_w.add_step(segment_id, segment_length[0][1], segment_fissure_inside, segment_id)
 
 
         # for section in self.borehole.section_list:
@@ -731,12 +774,16 @@ class FileWidget(AbstractBoreholeDialogItemWidget):
             shutil.copy2(self.path, step_dir_path_)
 
 class IndicatorLabel(QLabel):
-    def __init__(self, color="green", diameter=12):
+    def __init__(self, fisure_inside, diameter=12):
         super().__init__()
         self.setFixedSize(diameter, diameter)
-        self.set_color(color)
+        self.set_color(fisure_inside)
 
-    def set_color(self, color):
+    def set_color(self, fisure_inside):
+        if fisure_inside:
+            color = "red"
+        else:
+            color = "green"
         self.setStyleSheet(f"""
             background-color: {color};
             border-radius: {self.width() // 2}px;
@@ -744,9 +791,11 @@ class IndicatorLabel(QLabel):
         """)
 
 class StepWidget(AbstractBoreholeDialogItemWidget):
-    def __init__(self, number_: int, parent_list_: ListWidget, id_: str = None, is_show_: bool = False):
+    def __init__(self, number_: int, parent_list_: ListWidget, id_: str = None, segment_length_: str = None, fisure_inside_: bool = False, is_show_: bool = False):
         super().__init__(parent_list_, id_, is_show_)
         self.number = number_
+        self.fisure_inside = fisure_inside_
+        self.segment_length = segment_length_
         self.file_list = ListWidget(self)
         self.setMaximumHeight(150)
         self.setMinimumWidth(400)
@@ -754,12 +803,16 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         self.checkbox.stateChanged.connect(self.click_checkbox_action)
 
         self.number_editor = QLineEdit(self)
+        self.length_editor = QLineEdit(self)
         self.__editor_init()
         self.__values_to_editors()
 
         self.add_button = QPushButton('+', self)
         self.drop_button = QPushButton('▽', self)
-        self.add_defect_button = QPushButton('Добавить дефект', self)
+        if self.fisure_inside:
+            self.add_defect_button = QPushButton('Изменить дефект', self)
+        else:
+            self.add_defect_button = QPushButton('Добавить дефект', self)
         self.__button_init()
         self.is_dropped = True
         self.drop_list_action()
@@ -771,8 +824,13 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         self.number_editor.setValidator(QIntValidator())
         self.number_editor.textChanged.connect(self.number_edit_action)
 
+        self.length_editor.setAlignment(Qt.AlignLeft)
+        self.length_editor.setValidator(QIntValidator())
+        self.length_editor.textChanged.connect(self.length_edit_action)
+
     def __values_to_editors(self) -> None:
         self.number_editor.setText(str(self.number))
+        self.length_editor.setText(str(self.segment_length))
 
     def __button_init(self) -> None:
         self.add_button.setMaximumWidth(20)
@@ -789,10 +847,13 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         flo = QFormLayout()
         flo.addRow("Сегмент №", self.number_editor)
         tmp_layout.addLayout(flo)
+        flo = QFormLayout()
+        flo.addRow("Длина", self.length_editor)
+        tmp_layout.addLayout(flo)
         tmp_layout.addWidget(self.add_button)
         tmp_layout.addWidget(self.drop_button)
         tmp_layout.addWidget(self.delete_button)
-        tmp_layout.addWidget(IndicatorLabel("green"))
+        tmp_layout.addWidget(IndicatorLabel(self.fisure_inside))
         tmp_layout.addWidget(self.add_defect_button)
 
         core_layout = QVBoxLayout()
@@ -841,6 +902,14 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
                 return
         if len(text_):
             self.number = int(text_)
+
+    def length_edit_action(self, text_: str) -> None:
+        for step in self.parent_list.widget_list:
+            if len(text_) and int(text_) == step.segment_length:
+                self.length_editor.setText(str(self.segment_length))
+                return
+        if len(text_):
+            self.segment_length = int(text_)
 
     def __drop_list(self, is_drop: bool) -> None:
         self.is_dropped = is_drop
@@ -953,7 +1022,7 @@ class SectionWidget(AbstractBoreholeDialogItemWidget):
 
         self.name_editor = QLineEdit(self)
         self.depth_editor = QLineEdit(self)
-        self.length_editor = QLineEdit(self)
+        # self.length_editor = QLineEdit(self)
         self.__editor_init()
         self.__values_to_editors()
 
@@ -973,14 +1042,14 @@ class SectionWidget(AbstractBoreholeDialogItemWidget):
         self.depth_editor.setValidator(QIntValidator())
         self.depth_editor.textChanged.connect(self.depth_edit_action)
 
-        self.length_editor.setAlignment(Qt.AlignRight)
-        self.length_editor.setValidator(QDoubleValidator(0., 20., 1))
-        self.length_editor.textChanged.connect(self.length_edit_action)
+        # self.length_editor.setAlignment(Qt.AlignRight)
+        # self.length_editor.setValidator(QDoubleValidator(0., 20., 1))
+        # self.length_editor.textChanged.connect(self.length_edit_action)
 
     def __values_to_editors(self) -> None:
         self.name_editor.setText(self.name)
         self.depth_editor.setText(str(self.depth))
-        self.length_editor.setText(str(self.length))
+        # self.length_editor.setText(str(self.length))
 
     def __button_init(self) -> None:
         self.add_button.setMaximumWidth(20)
@@ -999,9 +1068,9 @@ class SectionWidget(AbstractBoreholeDialogItemWidget):
         flo = QFormLayout()
         flo.addRow("Глубина (м)", self.depth_editor)
         base_layout.addLayout(flo)
-        flo = QFormLayout()
-        flo.addRow("Длина (м)", self.length_editor)
-        base_layout.addLayout(flo)
+        # flo = QFormLayout()
+        # flo.addRow("Длина (м)", self.length_editor)
+        # base_layout.addLayout(flo)
         base_layout.addWidget(IndicatorLabel("green"))
         base_layout.addWidget(self.add_button)
         base_layout.addWidget(self.drop_button)
@@ -1010,11 +1079,11 @@ class SectionWidget(AbstractBoreholeDialogItemWidget):
         core_layout.addWidget(self.step_list)
         self.setLayout(core_layout)
 
-    def add_step(self, number_: int, id_: str = None, is_select: bool = True) -> None:
+    def add_step(self, number_: int, segment_length, fisure_inside: bool, id_: str = None, is_select: bool = True) -> None:
         for step in self.step_list.widget_list:
             if step.id == id_ or step.number == number_:
                 return
-        step_widget = StepWidget(number_, self.step_list, id_)
+        step_widget = StepWidget(number_, self.step_list, id_, segment_length, fisure_inside)
         self.step_list.add_widget(step_widget)
         step_widget.checkbox.setChecked(is_select)
 
