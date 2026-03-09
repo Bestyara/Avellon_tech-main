@@ -367,10 +367,11 @@ class Section:
         return self.min_value
 
     def add_step(self, number_: int, id_: str = None):
-        if id_ is not None:
-            for step in self.step_list:
-                if step.id == id_:
-                    return
+        for step in self.step_list:
+            if step.number == number_:
+                return
+            if id_ is not None and step.id == id_:
+                return
         path_to_new = self.path() + '/' + str(number_)
         if not os.path.isdir(path_to_new):
             os.mkdir(path_to_new)
@@ -581,8 +582,6 @@ class Borehole:
             self.id = uuid4()
         self.section_list = []
 
-        self.load_info_from_file()
-
     def __eq__(self, other_) -> bool:
         return self.id == other_.id
 
@@ -663,6 +662,67 @@ class Borehole:
             if not section_dict[section_name]:
                 self.add_section(os.path.basename(section_name))
 
+    def load_from_db(self, db_, borehole_id_: str) -> None:
+        """
+        Загружает структуру скважины (sections/steps) из БД.
+        Если в БД структуры нет — просто коррелирует filesystem.
+        """
+        if db_ is None or borehole_id_ is None:
+            self.correlate_data()
+            return
+
+        structure = db_.get_borehole_structure(borehole_id_)
+        if not structure:
+            self.correlate_data()
+            return
+
+        # DB is source of truth for sections/steps.
+        self.section_list.clear()
+        for s in structure:
+            self.add_section(
+                s["name"],
+                int(float(s.get("depth", 0) or 0)),
+                float(s.get("length", 0) or 0),
+                s.get("section_id"),
+            )
+            section_obj = self.section_list[-1]
+            section_obj.is_select = bool(s.get("is_selected", 1))
+            # Ignore filesystem-derived steps; DB is source of truth.
+            section_obj.step_list.clear()
+
+            for st in s.get("steps", []) or []:
+                section_obj.add_step(int(st["number"]), st.get("step_id"))
+                step_obj = section_obj.step_list[-1]
+                step_obj.is_select = bool(st.get("is_selected", 1))
+                for df in step_obj.data_list:
+                    df.is_select = step_obj.is_select
+
+    def save_to_db(self, db_, borehole_id_: str) -> None:
+        if db_ is None or borehole_id_ is None:
+            return
+        sections_payload = []
+        for sec_order, section in enumerate(self.section_list):
+            steps_payload = []
+            for step_order, step in enumerate(section.step_list):
+                steps_payload.append(
+                    {
+                        "number": int(step.number),
+                        "is_selected": bool(step.is_select),
+                        "sort_order": step_order,
+                    }
+                )
+            sections_payload.append(
+                {
+                    "name": section.name,
+                    "depth": int(section.depth),
+                    "length": float(section.length),
+                    "is_selected": bool(section.is_select),
+                    "sort_order": sec_order,
+                    "steps": steps_payload,
+                }
+            )
+        db_.replace_borehole_structure(borehole_id_, sections_payload)
+
     def get_xy_dataframes_dict(self) -> dict:
         xy_dataframes_dict = dict()
         for section in self.section_list:
@@ -738,52 +798,3 @@ class Borehole:
                 for key in dataframes_dict[step_num][section_depth].keys():
                     dataframes_dict[step_num][section_depth][key]['rx'] = dataframes_dict[step_num][section_depth][key]['x'] / maxes_dict[section_depth][key]
         return dataframes_dict
-
-    def save_info_to_file(self, filename_: str = cf.BOREHOLE_INFO_SAVE_FILENAME) -> None:
-        path_filename = self.path() + '/' + filename_
-        if os.path.isfile(path_filename):
-            os.remove(path_filename)
-        file = open(path_filename, "w")
-        file.write(cf.BOREHOLE_NAME_BOREHOLE_INFO_F(self.name))
-
-        file.write(cf.START_SECTIONS_TAG_BOREHOLE_INFO)
-        for section in self.section_list:
-            file.write(cf.START_SECTION_TAG_BOREHOLE_INFO)
-            file.write(cf.SECTION_NAME_BOREHOLE_INFO_F(section.name))
-            file.write(cf.SECTION_DEPTH_BOREHOLE_INFO_F(section.depth))
-            file.write(cf.SECTION_LENGTH_BOREHOLE_INFO_F(section.length))
-            file.write(cf.END_SECTION_TAG_BOREHOLE_INFO)
-        file.write(cf.END_SECTIONS_TAG_BOREHOLE_INFO)
-        file.close()
-
-    def load_info_from_file(self, filename_: str = cf.BOREHOLE_INFO_SAVE_FILENAME) -> None:
-        path = self.path() + '/' + filename_
-        if not os.path.isfile(path):
-            return
-        file = open(path, "r")
-
-        is_start = True
-        is_in_section = False
-        tmp_name, tmp_depth, tmp_length = '', -1, -1.
-        for line in file:
-            if is_start:
-                if line[:len(cf.BOREHOLE_NAME_BOREHOLE_INFO)] != cf.BOREHOLE_NAME_BOREHOLE_INFO:
-                    file.close()
-                    return
-                self.name = line[len(cf.BOREHOLE_NAME_BOREHOLE_INFO) + 1:-1]
-                is_start = False
-            else:
-                if is_in_section:
-                    if line[:len(cf.SECTION_NAME_BOREHOLE_INFO)] == cf.SECTION_NAME_BOREHOLE_INFO:
-                        tmp_name = line[len(cf.SECTION_NAME_BOREHOLE_INFO) + 1:-1]
-                    elif line[:len(cf.SECTION_DEPTH_BOREHOLE_INFO)] == cf.SECTION_DEPTH_BOREHOLE_INFO:
-                        tmp_depth = int(float(line[len(cf.SECTION_DEPTH_BOREHOLE_INFO) + 1:]))
-                    elif line[:len(cf.SECTION_LENGTH_BOREHOLE_INFO)] == cf.SECTION_LENGTH_BOREHOLE_INFO:
-                        tmp_length = float(line[len(cf.SECTION_LENGTH_BOREHOLE_INFO) + 1:])
-                    elif line == cf.END_SECTION_TAG_BOREHOLE_INFO:
-                        self.add_section(tmp_name, tmp_depth, tmp_length)
-                        is_in_section = False
-                elif line == cf.START_SECTION_TAG_BOREHOLE_INFO:
-                    is_in_section = True
-                    tmp_name, tmp_depth, tmp_length = '', -1, -1.
-        file.close()

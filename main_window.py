@@ -15,7 +15,8 @@ from graph_widget import OscilloscopeGraphWidget, AmplitudeTimeGraphWidget, \
     FrequencyResponseGraphWidget, WindRoseGraphWidget, DepthResponseGraphWidget
 from third_party import AbstractFunctor, HelpInfoDialog, SimpleItemListWidget, \
     select_path_to_files, select_path_to_dir, ListWidget, AbstractWindowWidget, \
-    MyCheckBox, ButtonWidget, MessageBox, get_last_project_path, AbstractToolDialog, FrequencyFilterDialog, AxisXDialog
+    MyCheckBox, ButtonWidget, MessageBox, get_last_project_id, save_last_project_id, \
+    AbstractToolDialog, FrequencyFilterDialog, AxisXDialog
 from loadlabel import loading
 from borehole_logic import *
 from converter import ConverterDialog
@@ -81,28 +82,57 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(cf.ICON_WINDOW_PATH))
 
     def __cache_init(self) -> None:
-        last_project_path = get_last_project_path()
-        if last_project_path is None:
-            self.run_main_menu()
-            return
-        self.run_borehole_menu(last_project_path)
+        # Новый кэш: project_id -> project_path через БД.
+        last_project_id = get_last_project_id()
+        if last_project_id is not None:
+            project = self.db.get_project_by_id(last_project_id)
+            if project and os.path.isdir(project["project_path"]):
+                self.run_borehole_menu(project["project_path"], project_id=project["project_id"])
+                return
 
-    def __cache_save(self, project_name_: str) -> None:
-        if project_name_ is None:
+        self.run_main_menu()
+
+    def __cache_save_project_id(self, project_id_: str) -> None:
+        if project_id_ is None:
             return
-        if not os.path.isdir(cf.CACHE_DIR_PATH):
-            os.mkdir(cf.CACHE_DIR_PATH)
-        file = open(cf.CACHE_FILE_INFO_PATH, 'w', encoding=cf.DEFAULT_ENCODING)
-        file.write('' if project_name_ is None else project_name_)
-        file.close()
+        save_last_project_id(project_id_)
 
     def run_main_menu(self) -> None:
         self.setWindowTitle(cf.MAIN_WINDOW_TITLE)
         self.setCentralWidget(MainMenuWidget(self))
 
-    def run_borehole_menu(self, project_path: str) -> None:
-        self.__cache_save(project_path)
+    def run_borehole_menu(self, project_path: str, project_id: str = None) -> None:
+        if project_id is None and project_path is not None:
+            project = self.db.get_project_by_path(project_path)
+            project_id = None if project is None else project["project_id"]
+        self.__cache_save_project_id(project_id)
         self.setCentralWidget(BoreholeMenuWindowWidget(project_path, self))
+
+    def open_project_by_path(self, project_path: str) -> None:
+        if project_path is None or len(project_path) < 1:
+            return
+        if not os.path.isdir(project_path):
+            MessageBox().warning(cf.NOT_DIR_WARNING_TITTLE, cf.NOT_DIR_WARNING_MESSAGE_F(project_path))
+            return
+
+        project = self.db.get_project_by_path(project_path)
+        if project is None:
+            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE,
+                                 cf.PROJECT_NOT_REGISTERED_WARNING_MESSAGE_F(project_path))
+            return
+
+        self.run_borehole_menu(project["project_path"], project_id=project["project_id"])
+
+    def open_last_project(self) -> None:
+        last_project_id = get_last_project_id()
+        if last_project_id is None:
+            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE, "Не найден кэш последнего проекта.")
+            return
+        project = self.db.get_project_by_id(last_project_id)
+        if project is None or not os.path.isdir(project["project_path"]):
+            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE, "Последний проект не найден в БД или папка была удалена.")
+            return
+        self.run_borehole_menu(project["project_path"], project_id=project["project_id"])
 
     def exit(self) -> None:
         self.app.exit()
@@ -154,16 +184,13 @@ class MainMenuWidget(QWidget):
         self.create_project_dialog.run()
 
     def open_last_project_action(self) -> None:
-        self.main_window.run_borehole_menu(get_last_project_path())
+        self.main_window.open_last_project()
 
     def open_project_action(self) -> None:
         project_path = select_path_to_dir(self)
         if len(project_path) < 1:
             return
-        if not os.path.isdir(project_path):
-            MessageBox().warning(cf.NOT_DIR_WARNING_TITTLE, cf.NOT_DIR_WARNING_MESSAGE_F(project_path))
-            return
-        self.main_window.run_borehole_menu(project_path)
+        self.main_window.open_project_by_path(project_path)
 
     def update_action(self) -> None:
         if pathlib.Path(cf.EXE_FILENAME).is_file():
@@ -268,7 +295,16 @@ class CreateProjectDialog(AbstractToolDialog):
                 return
         else:
             os.mkdir(path)
-        self.main_menu_widget.main_window.run_borehole_menu(path)
+
+        # Регистрируем проект в БД (папка может остаться для привычного UX).
+        try:
+            project_id = self.main_menu_widget.main_window.db.create_project(self.project_name, path)
+            self.main_menu_widget.main_window.db.get_or_create_borehole_for_project(project_id, self.project_name)
+        except Exception as e:
+            MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, str(e))
+            return
+
+        self.main_menu_widget.main_window.run_borehole_menu(path, project_id=project_id)
         self.close()
 
     def run(self) -> None:
@@ -357,7 +393,18 @@ class BoreholeMenuWindowWidget(QWidget):
         self.main_window = main_window_
         self.main_window.setWindowTitle(self.name + " - скважина")
 
-        self.borehole = Borehole(self.name, str(pathlib.Path(path_).parent))
+        project = self.main_window.db.get_project_by_path(path_)
+        if project is None:
+            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE,
+                                 cf.PROJECT_NOT_REGISTERED_WARNING_MESSAGE_F(path_))
+            main_window_.run_main_menu()
+            return
+
+        borehole_row = self.main_window.db.get_or_create_borehole_for_project(project["project_id"], self.name)
+        self.borehole_id = borehole_row["borehole_id"]
+
+        self.borehole = Borehole(self.name, str(pathlib.Path(path_).parent), id_=self.borehole_id)
+        self.borehole.load_from_db(self.main_window.db, self.borehole_id)
         self.borehole_dialog = BoreHoleDialog(self.borehole, self)
         self.converter_dialog = ConverterDialog(self)
 
@@ -539,8 +586,6 @@ class BoreHoleDialog(AbstractToolDialog):
                     if section.name == file_base_name:
                         is_inside_widget_list = True
                         break
-            if os.path.isfile(filename) and file_base_name == cf.BOREHOLE_INFO_SAVE_FILENAME:
-                is_inside_widget_list = True
             if not is_inside_widget_list:
                 if os.path.isdir(filename):
                     shutil.rmtree(filename)
@@ -592,7 +637,14 @@ class BoreHoleDialog(AbstractToolDialog):
                     section.depth = section_w.depth
                     section.length = section_w.length
         print('______________________________')
-        self.borehole.save_info_to_file()
+        # Сохраняем структуру секций/шагов в БД.
+        try:
+            parent = self.parent()
+            borehole_id = getattr(parent, "borehole_id", None)
+            db = getattr(getattr(parent, "main_window", None), "db", None)
+            self.borehole.save_to_db(db, borehole_id)
+        except Exception as e:
+            MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, str(e))
 
     def run(self) -> None:
         self.section_list_widget.remove_all()
