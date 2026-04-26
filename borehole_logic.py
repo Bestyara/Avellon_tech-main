@@ -85,9 +85,6 @@ class Step:
         self.data_list = []
         self.is_select = False
 
-        if len([f for f in pathlib.Path(self.path()).glob('*')]):
-            self.correlate_data()
-
     def __eq__(self, other_) -> bool:
         return self.id == other_.id
 
@@ -351,9 +348,6 @@ class Section:
         self.min_value = None
         self.step_list = []
         self.is_select = False
-
-        if len([f for f in pathlib.Path(self.path()).glob('*')]):
-            self.correlate_data()
 
     def __eq__(self, other_) -> bool:
         return self.id == other_.id
@@ -674,12 +668,12 @@ class Borehole:
         Если в БД структуры нет — просто коррелирует filesystem.
         """
         if db_ is None or borehole_id_ is None:
-            self.correlate_data()
+            self.section_list.clear()
             return
 
         structure = db_.get_borehole_structure(borehole_id_)
         if not structure:
-            self.correlate_data()
+            self.section_list.clear()
             return
 
         # DB is source of truth for sections/steps.
@@ -720,10 +714,9 @@ class Borehole:
                 step_map[int(step.number)] = step
 
         for row in file_rows:
-            file_path = str(row.get("file_path") or "").strip()
             file_name = str(row.get("file_name") or "").strip()
             file_id = row.get("file_id")
-            if not file_path and not file_name:
+            if not file_name:
                 continue
 
             target_step = None
@@ -739,9 +732,8 @@ class Borehole:
             if target_step is None:
                 continue
 
-            preferred_ref = file_path if file_path else file_name
             target_step.add_file(
-                preferred_ref,
+                file_name,
                 id_=file_id,
                 allow_virtual_=True,
                 db_file_id_=file_id,

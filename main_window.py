@@ -850,23 +850,8 @@ class StepWidget(AbstractBoreholeDialogItemWidget):
         self.__drop_list(not self.is_dropped)
 
     def save_all(self, section_path_: str) -> None:
-        step_path = section_path_ + '/' + str(self.number)
-        if not os.path.isdir(step_path):
-            os.mkdir(step_path)
-        for filename in pathlib.Path(step_path).glob('*'):
-            is_inside_widget_list = False
-            file_base_name = os.path.basename(filename)
-            for file in self.file_list.widget_list:
-                if file.basename == file_base_name:
-                    is_inside_widget_list = True
-                    break
-            if not is_inside_widget_list:
-                if os.path.isdir(filename):
-                    shutil.rmtree(filename)
-                else:
-                    os.remove(filename)
-        for file in self.file_list.widget_list:
-            file.copy_to(step_path)
+        # DB-only mode: файловая синхронизация отключена.
+        return
 
 
 class SectionWidget(AbstractBoreholeDialogItemWidget):
@@ -1000,24 +985,8 @@ class SectionWidget(AbstractBoreholeDialogItemWidget):
         self.__drop_list(not self.is_dropped)
 
     def save_all(self, borehole_path_: str) -> None:
-        section_path = borehole_path_ + '/' + self.name
-        if not os.path.isdir(section_path):
-            os.mkdir(section_path)
-        for filename in pathlib.Path(section_path).glob('*'):
-            is_inside_widget_list = False
-            if os.path.isdir(filename) and str(os.path.basename(filename)).isdigit():
-                file_num = int(os.path.basename(filename))
-                for step in self.step_list.widget_list:
-                    if step.number == file_num:
-                        is_inside_widget_list = True
-                        break
-            if not is_inside_widget_list:
-                if os.path.isdir(filename):
-                    shutil.rmtree(filename)
-                else:
-                    os.remove(filename)
-        for step in self.step_list.widget_list:
-            step.save_all(section_path)
+        # DB-only mode: файловая синхронизация отключена.
+        return
 
 
 class HideLineToolDialog(AbstractToolDialog):

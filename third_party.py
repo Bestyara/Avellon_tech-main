@@ -237,31 +237,6 @@ def select_path_to_one_file(filter_str_: str, parent_: QWidget = None, **kwargs)
     return QFileDialog.getOpenFileName(parent_, cf.SELECT_FILE_FILE_DIALOG_TITLE, filter=filter_str_)[0]
 
 
-def get_last_project_id() -> Optional[str]:
-    """
-    Возвращает project_id последнего открытого проекта из кэша (cache v2).
-    Если кэша нет или он пустой — возвращает None.
-    """
-    if not os.path.isdir(cf.CACHE_DIR_PATH):
-        return None
-    if not os.path.isfile(cf.CACHE_FILE_LAST_PROJECT_ID_PATH):
-        return None
-    with open(cf.CACHE_FILE_LAST_PROJECT_ID_PATH, 'r', encoding=cf.DEFAULT_ENCODING) as f:
-        project_id = f.readline().strip()
-    return project_id if len(project_id) else None
-
-
-def save_last_project_id(project_id: Optional[str]) -> None:
-    if not os.path.isdir(cf.CACHE_DIR_PATH):
-        os.mkdir(cf.CACHE_DIR_PATH)
-    with open(cf.CACHE_FILE_LAST_PROJECT_ID_PATH, 'w', encoding=cf.DEFAULT_ENCODING) as f:
-        f.write('' if project_id is None else str(project_id))
-
-
-# Backward/forward compatibility alias (internal use)
-set_last_project_id = save_last_project_id
-
-
 class ButtonWidget(QPushButton):
     def __init__(self, name_: str, parent_: QWidget = None, *args, **kwargs):
         super().__init__(name_, parent_)
