@@ -105,12 +105,20 @@ class Step:
             for data_file in self.data_list:
                 if data_file.id == id_:
                     return
-        if os.path.exists(self.path() + '/' + file_name_):
-            self.data_list.append(DataFile(file_name_, self.path(), id_))
+        source_path = str(file_name_ or "")
+        if os.path.isabs(source_path) and os.path.isfile(source_path):
+            self.data_list.append(
+                DataFile(
+                    os.path.basename(source_path),
+                    os.path.dirname(source_path),
+                    id_,
+                )
+            )
+            return
+        if os.path.exists(self.path() + '/' + source_path):
+            self.data_list.append(DataFile(source_path, self.path(), id_))
 
     def __remove_file_by_index(self, i_: int) -> None:
-        if self.data_list[i_].exist():
-            os.remove(self.data_list[i_].path())
         self.data_list.pop(i_)
 
     def remove_all(self, full_clean_: bool = False) -> None:
@@ -118,9 +126,6 @@ class Step:
         while i >= 0:
             self.__remove_file_by_index(i)
             i -= 1
-        if full_clean_:
-            shutil.rmtree(self.path())
-            os.mkdir(self.path())
 
     def remove_file(self, **kwargs) -> None:
         if 'id' in kwargs:
@@ -372,16 +377,11 @@ class Section:
                 return
             if id_ is not None and step.id == id_:
                 return
-        path_to_new = self.path() + '/' + str(number_)
-        if not os.path.isdir(path_to_new):
-            os.mkdir(path_to_new)
         new_step = Step(number_, self.path(), id_)
         new_step.correlate_data()
         self.step_list.append(new_step)
 
     def __remove_step_by_index(self, i_: int) -> None:
-        if self.step_list[i_].exist():
-            shutil.rmtree(self.step_list[i_].path())
         self.step_list.pop(i_)
 
     def remove_all(self, full_clean_: bool = False) -> None:
@@ -389,9 +389,6 @@ class Section:
         while i >= 0:
             self.__remove_step_by_index(i)
             i -= 1
-        if full_clean_:
-            shutil.rmtree(self.path())
-            os.mkdir(self.path())
 
     def remove_step(self, **kwargs) -> None:
         if 'id' in kwargs:
@@ -574,8 +571,6 @@ class Borehole:
     def __init__(self, name_: str, path_: str, id_: str = None):
         self.name = name_
         self.up_path = path_
-        if not os.path.isdir(self.path()):
-            os.mkdir(self.path())
 
         self.id = id_
         if self.id is None:
@@ -599,14 +594,9 @@ class Borehole:
             for step in self.section_list:
                 if step.id == id_:
                     return
-        path_to_new = self.path() + '/' + name_
-        if not os.path.isdir(path_to_new):
-            os.mkdir(path_to_new)
         self.section_list.append(Section(name_, self.path(), depth_, length_, id_))
 
     def __remove_section_by_index(self, i_: int) -> None:
-        if self.section_list[i_].exist():
-            shutil.rmtree(self.section_list[i_].path())
         self.section_list.pop(i_)
 
     def remove_all(self, full_clean_: bool = False) -> None:
@@ -614,9 +604,6 @@ class Borehole:
         while i >= 0:
             self.__remove_section_by_index(i)
             i -= 1
-        if full_clean_:
-            shutil.rmtree(self.path())
-            os.mkdir(self.path())
 
     def remove_section(self, **kwargs) -> None:
         if 'id' in kwargs:
@@ -722,6 +709,19 @@ class Borehole:
                 }
             )
         db_.replace_borehole_structure(borehole_id_, sections_payload)
+
+    def save_files_to_db(self) -> None:
+        for section in self.section_list:
+            for step in section.step_list:
+                for data_file in step.data_list:
+                    file_path = data_file.path()
+                    if not os.path.isfile(file_path):
+                        continue
+                    try:
+                        XYDataFrame(file_path)
+                    except Exception:
+                        # Ошибка отдельного файла не должна останавливать общий проход.
+                        continue
 
     def get_xy_dataframes_dict(self) -> dict:
         xy_dataframes_dict = dict()

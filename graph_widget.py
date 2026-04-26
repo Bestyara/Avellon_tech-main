@@ -1,13 +1,17 @@
 import os
+import json
+import pathlib
 import numpy as np
 import pandas as pd
+from typing import Optional
 from uuid import uuid4
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QDialog
 from PySide6.QtCore import QPoint, QRect
 from pyqtgraph import PlotWidget, mkPen, QtGui, QtCore
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from third_party import MyWarning, MessageBox, AxisXDialog
+from third_party import MyWarning, MessageBox, AxisXDialog, get_num_file_by_default
+from db_storage import DbStorage
 import config as cf
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
@@ -39,30 +43,72 @@ class AbstractDataFrame:
 
 
 class XYDataFrame(AbstractDataFrame):
+    _db_instance = None
+    _active_borehole_id = None
+    # Приоритетный источник данных для чтения:
+    # True -> сначала payload из БД, затем fallback к CSV.
+    PREFER_DB_CACHE = True
+
+    @staticmethod
+    def _get_db():
+        """
+        Ленивая инициализация единственного экземпляра DbStorage.
+        При ошибках возвращает None, чтобы не ломать приложение.
+        """
+        if XYDataFrame._db_instance is not None:
+            return XYDataFrame._db_instance
+        try:
+            XYDataFrame._db_instance = DbStorage()
+        except Exception:
+            XYDataFrame._db_instance = None
+        return XYDataFrame._db_instance
+
+    @staticmethod
+    def set_active_borehole_id(borehole_id: Optional[str]) -> None:
+        XYDataFrame._active_borehole_id = borehole_id
+
     def __init__(self, filename_: str, parent_: QWidget = None):
         super().__init__(os.path.basename(filename_), parent_)
         self.filename = filename_
         self.data = None
         self.max_y = None
         self.min_y = None
+        self.mean_y = None
         is_exception = False
 
-        if not os.path.exists(self.filename) or not os.path.isfile(self.filename):
-            MessageBox().warning(cf.FILE_NOT_EXIST_WARNING_TITLE, cf.FILE_NOT_EXIST_WARNING_MESSAGE_F(self.filename))
-        else:
-            self.data = pd.read_csv(self.filename, header=None, on_bad_lines='skip', dtype=np.dtype(str))
-        try:
-            self.header = self.header_init()
-        except MyWarning as mw:
-            MessageBox().warning(mw.exception_title, mw.message)
-            is_exception = True
-        except:
-            MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, cf.UNKNOWN_WARNING_MESSAGE)
-            is_exception = True
+        # Сначала пробуем загрузить данные файла из БД (если режим включён).
+        loaded_from_db = self._load_from_db() if self.PREFER_DB_CACHE else False
 
-        if is_exception:
-            self.clear()
-        self.data_init()
+        if not loaded_from_db:
+            # Если в БД данных нет или произошла ошибка — работаем по старой схеме с CSV.
+            if not os.path.exists(self.filename) or not os.path.isfile(self.filename):
+                MessageBox().warning(
+                    cf.FILE_NOT_EXIST_WARNING_TITLE,
+                    cf.FILE_NOT_EXIST_WARNING_MESSAGE_F(self.filename),
+                )
+            else:
+                self.data = pd.read_csv(
+                    self.filename,
+                    header=None,
+                    on_bad_lines="skip",
+                    dtype=np.dtype(str),
+                )
+            try:
+                self.header = self.header_init()
+            except MyWarning as mw:
+                MessageBox().warning(mw.exception_title, mw.message)
+                is_exception = True
+            except Exception:
+                MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, cf.UNKNOWN_WARNING_MESSAGE)
+                is_exception = True
+
+            if is_exception:
+                self.clear()
+                return
+
+            self.data_init()
+            # После успешного чтения CSV сохраняем результат в БД (если она доступна).
+            self._save_to_db()
 
     def clear(self):
         self.active = False
@@ -98,6 +144,107 @@ class XYDataFrame(AbstractDataFrame):
         # Корректируем минимумы и максимумы
         self.max_y = max(self.data['y'])
         self.min_y = min(self.data['y'])
+
+    def _load_from_db(self) -> bool:
+        """
+        Пытается загрузить данные файла из БД по пути к файлу.
+        При любой ошибке/несоответствии формата возвращает False.
+        """
+        db = self._get_db()
+        if db is None:
+            return False
+
+        try:
+            row = db.get_file_by_path(self.filename)
+        except Exception:
+            return False
+
+        if not row:
+            return False
+
+        raw_data = row.get("data")
+        try:
+            payload = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+        except Exception:
+            return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        header = payload.get("header") or {}
+        data = payload.get("data") or {}
+        stats = payload.get("stats") or {}
+
+        if not isinstance(header, dict) or not isinstance(data, dict):
+            return False
+        if "y" not in data:
+            return False
+
+        self.header = header
+        self.data = data
+        self.max_y = stats.get("max_y")
+        self.min_y = stats.get("min_y")
+        self.mean_y = stats.get("mean_y")
+        self.active = True
+        return self.is_correct_read()
+
+    def _save_to_db(self) -> None:
+        """
+        Сохраняет заголовок и данные файла в таблицу files.
+        Любые ошибки работы с БД игнорируются, чтобы не влиять на UI.
+        """
+        if not self.is_correct_read():
+            return
+
+        db = self._get_db()
+        if db is None:
+            return
+
+        try:
+            file_path = str(pathlib.Path(self.filename).expanduser().resolve())
+        except Exception:
+            return
+
+        # DB-only: запрещаем выводить проект/скважину из файловой структуры.
+        # Сохраняем только в уже выбранную скважину (контекст текущего UI).
+        borehole_id = XYDataFrame._active_borehole_id
+        if not borehole_id:
+            return
+
+        measurement_num, sensor_num = get_num_file_by_default(
+            os.path.basename(self.filename),
+            cf.DEFAULT_SENSOR_AMOUNT,
+        )
+
+        payload = {
+            "header": self.header or {},
+            "data": self.data or {},
+            "stats": {
+                "max_y": self.max_y,
+                "min_y": self.min_y,
+                "mean_y": self.mean_y,
+            },
+        }
+
+        meta = {}
+        if measurement_num != -1:
+            meta["measurement_num"] = measurement_num
+        if sensor_num != -1:
+            meta["sensor_num"] = sensor_num
+        if meta:
+            payload["meta"] = meta
+
+        try:
+            db.upsert_file_data(
+                borehole_id=borehole_id,
+                file_path=file_path,
+                file_name=os.path.basename(self.filename),
+                part_of_file_id=0,
+                payload=payload,
+            )
+        except Exception:
+            # Любые ошибки кеширования файла в БД игнорируем.
+            return
 
     @staticmethod
     def get_data_x(data_points_: int, time_base_: int) -> dict:

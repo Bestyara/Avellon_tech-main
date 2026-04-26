@@ -17,7 +17,6 @@ DATA_CONVERTER_DIALOG_TITLE = 'Data Converter'
 
 # Folder names and project files names
 DEFAULT_PROJECT_NAME = "Avellon_Project"
-DEFAULT_PROJECT_FOLDER = 'projects'
 CACHE_DIR_PATH = '__avellon_cache__'
 # Новый кэш для последнего проекта (в БД): хранит project_id
 CACHE_FILE_LAST_PROJECT_ID_PATH = CACHE_DIR_PATH + '/last_project_id.txt'
@@ -112,8 +111,6 @@ FILE_NOT_EXIST_WARNING_TITLE = "File not exist"
 WRONG_TYPE_WARNING_TITLE = "Wrong type"
 WRONG_FILENAME_WARNING_TITLE = "Wrong filename"
 INCORRECT_FILE_CONTENT_WARNING_TITLE = "Incorrect file content"
-NOT_EMPTY_FOLDER_WARNING_TITLE = "Not empty folder"
-NOT_DIR_WARNING_TITTLE = 'Not a dir'
 EMPTY_NAME_WARNING_TITTLE = 'Empty name'
 INVALID_NAME_WARNING_TITTLE = 'Invalid name'
 UNKNOWN_WARNING_TITLE = "Unknown warning"
@@ -123,26 +120,20 @@ PROJECT_NOT_REGISTERED_WARNING_TITLE = "Проект не найден"
 
 # WARNING MESSAGE
 UNKNOWN_WARNING_MESSAGE = "Неизвестная ошибка при чтении файла."
-NOT_DIR_WARNING_MESSAGE = "Выбранный объект не является папкой!"
-NOT_EMPTY_FOLDER_WARNING_MESSAGE ="Выбранная папка содержит файлы!\nВыберете пустую или не существующую папку."
 EMPTY_PROJECT_NAME_WARNING_MESSAGE = "Название проекта не может быть пустым."
 INVALID_PROJECT_NAME_WARNING_MESSAGE = "Не корректное имя проекта."
 WRONG_FILENAME_WARNING_MESSAGE = "Файл имеет не соответстующее требованиям название."
 CONVERT_WARNING_MESSAGE = "Ошибка конвертирования!"
 FILE_NOT_EXIST_WARNING_MESSAGE = "Файл не существует или не является файлом!"
-PROJECT_NOT_REGISTERED_WARNING_MESSAGE = "Выбранная папка не зарегистрирована как проект в БД."
-def NOT_DIR_WARNING_MESSAGE_F(path_: str = "") -> str:
-    return f"{path_} - не является папкой!"
-def NOT_EMPTY_FOLDER_WARNING_MESSAGE_F(path_: str = "") -> str:
-    return f"Выбранная папка: - {path_} - содержит файлы!\nВыберете пустую или не существующую папку."
+PROJECT_NOT_REGISTERED_WARNING_MESSAGE = "Выбранный проект не найден в БД."
 def WRONG_FILENAME_WARNING_MESSAGE_F(name_: str = "") -> str:
     return f"{name_} - имеет не соответстующее требованиям название!"
 def FILE_NOT_EXIST_WARNING_MESSAGE_F(filename_: str = "") -> str:
     return f"{filename_} - не существует или не является файлом!"
 def INCORRECT_FILE_HEADER_WARNING_MESSAGE_F(filename_: str = "") -> str:
     return f"Выбранный файл: - {filename_} - имеет неправильное наполнение в заголовке!"
-def PROJECT_NOT_REGISTERED_WARNING_MESSAGE_F(path_: str = "") -> str:
-    return f"Папка: {path_}\n\n{PROJECT_NOT_REGISTERED_WARNING_MESSAGE}"
+def PROJECT_NOT_REGISTERED_WARNING_MESSAGE_F(project_ref: str = "") -> str:
+    return f"Проект: {project_ref}\n\n{PROJECT_NOT_REGISTERED_WARNING_MESSAGE}"
 
 
 # INFORMATION TITLES

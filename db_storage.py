@@ -1,6 +1,7 @@
 import os
 import pathlib
 import sqlite3
+import json
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -11,12 +12,13 @@ class DbStorage:
 
     Schema v1:
     - UUIDs stored as TEXT (uuid4())
-    - projects have a stable project_path (TEXT UNIQUE)
+    - projects use project_id/project_name as primary API
+    - all datetime fields are stored as TIMESTAMP
     """
 
     SCHEMA_VERSION = 1
 
-    def __init__(self, file_path: str = "db_storage.dat"):
+    def __init__(self, file_path: str = "storage.dat"):
         self.cursor = None
         self.conn = None
         self.file_path = file_path
@@ -60,8 +62,8 @@ class DbStorage:
             CREATE TABLE IF NOT EXISTS projects (
                 project_id TEXT NOT NULL PRIMARY KEY,
                 project_name TEXT NOT NULL,
-                project_path TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_time_opened TIMESTAMP
             );
             """
         )
@@ -71,9 +73,6 @@ class DbStorage:
             CREATE TABLE IF NOT EXISTS boreholes (
                 borehole_id TEXT NOT NULL PRIMARY KEY,
                 borehole_name TEXT NOT NULL,
-                length REAL,
-                depth REAL,
-                fissure_inside INTEGER,
                 project_id TEXT NOT NULL REFERENCES projects (project_id) ON DELETE CASCADE
             );
             """
@@ -115,8 +114,9 @@ class DbStorage:
                 file_name TEXT NOT NULL,
                 borehole_id TEXT NOT NULL REFERENCES boreholes (borehole_id) ON DELETE CASCADE,
                 part_of_file_id INTEGER NOT NULL,
-                creation_date TEXT,
-                data JSON NOT NULL
+                creation_date TIMESTAMP,
+                data JSON NOT NULL,
+                file_path TEXT UNIQUE
             );
             """
         )
@@ -143,9 +143,6 @@ class DbStorage:
         )
 
         self.cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_projects_project_path ON projects(project_path);"
-        )
-        self.cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_boreholes_project_id ON boreholes(project_id);"
         )
         self.cursor.execute(
@@ -155,155 +152,108 @@ class DbStorage:
             "CREATE INDEX IF NOT EXISTS idx_steps_section_id ON steps(section_id);"
         )
 
-    def _migrate_legacy_to_v1(self) -> None:
-        """
-        Best-effort migration from legacy (no project_path, bigint ids) to schema v1.
-        """
-        legacy_tables = ["wind_roses", "frequency_characteristics", "files", "boreholes", "projects"]
-        has_any_legacy = any(self._table_exists(t) for t in legacy_tables)
-        if not has_any_legacy:
-            self._create_schema_v1()
-            self._set_user_version(self.SCHEMA_VERSION)
-            return
-
-        if not self._table_exists("projects") or self._table_has_column("projects", "project_path"):
-            self._create_schema_v1()
-            self._set_user_version(self.SCHEMA_VERSION)
-            return
-
-        with self.conn:
-            for t in legacy_tables:
-                if self._table_exists(t):
-                    self.cursor.execute(f"ALTER TABLE {t} RENAME TO {t}_old;")
-
-            self._create_schema_v1()
-
-            if self._table_exists("projects_old"):
-                self.cursor.execute(
-                    """
-                    INSERT INTO projects(project_id, project_name, project_path, created_at)
-                    SELECT
-                        CAST(project_id AS TEXT),
-                        project_name,
-                        'legacy:' || CAST(project_id AS TEXT),
-                        datetime('now')
-                    FROM projects_old;
-                    """
-                )
-
-            if self._table_exists("boreholes_old"):
-                self.cursor.execute(
-                    """
-                    INSERT INTO boreholes(borehole_id, borehole_name, length, depth, fissure_inside, project_id)
-                    SELECT
-                        CAST(borehole_id AS TEXT),
-                        borehole_name,
-                        length,
-                        depth,
-                        fissure_inside,
-                        CAST(project_id AS TEXT)
-                    FROM boreholes_old;
-                    """
-                )
-
-            if self._table_exists("files_old"):
-                self.cursor.execute(
-                    """
-                    INSERT INTO files(file_id, file_name, borehole_id, part_of_file_id, creation_date, data)
-                    SELECT
-                        CAST(file_id AS TEXT),
-                        file_name,
-                        CAST(borehole_id AS TEXT),
-                        part_of_file_id,
-                        creation_date,
-                        data
-                    FROM files_old;
-                    """
-                )
-
-            if self._table_exists("frequency_characteristics_old"):
-                self.cursor.execute(
-                    """
-                    INSERT INTO frequency_characteristics(borehole_id, file_id, frequency_characteristic_id)
-                    SELECT
-                        CAST(borehole_id AS TEXT),
-                        CAST(file_id AS TEXT),
-                        frequency_characteristic_id
-                    FROM frequency_characteristics_old;
-                    """
-                )
-
-            if self._table_exists("wind_roses_old"):
-                self.cursor.execute(
-                    """
-                    INSERT INTO wind_roses(borehole_id, file_id, wind_rose_id, measurement_id)
-                    SELECT
-                        CAST(borehole_id AS TEXT),
-                        CAST(file_id AS TEXT),
-                        wind_rose_id,
-                        measurement_id
-                    FROM wind_roses_old;
-                    """
-                )
-
-            for t in legacy_tables:
-                old = f"{t}_old"
-                if self._table_exists(old):
-                    self.cursor.execute(f"DROP TABLE {old};")
-
-            self._set_user_version(self.SCHEMA_VERSION)
-
     def _ensure_schema(self) -> None:
-        version = self._get_user_version()
-        if version >= self.SCHEMA_VERSION:
-            self._create_schema_v1()
-            self.conn.commit()
-            return
-        if self._table_exists("projects") and not self._table_has_column("projects", "project_path"):
-            self._migrate_legacy_to_v1()
-            self.conn.commit()
-            return
         self._create_schema_v1()
         self._set_user_version(self.SCHEMA_VERSION)
         self.conn.commit()
 
     @staticmethod
-    def _normalize_project_path(path: str) -> str:
+    def _normalize_project_name(name: str) -> str:
+        return (name or "").strip()
+
+    @staticmethod
+    def _normalize_file_path(path: str) -> str:
         return str(pathlib.Path(path).expanduser().resolve())
 
-    def create_project(self, name: str, path: str) -> str:
+    def create_project(self, name: str) -> str:
+        project_name = self._normalize_project_name(name)
+        if not project_name:
+            raise ValueError("Название проекта не может быть пустым.")
+
+        existing = self.cursor.execute(
+            """
+            SELECT project_id
+            FROM projects
+            WHERE lower(trim(project_name)) = lower(trim(?))
+            LIMIT 1;
+            """,
+            (project_name,),
+        ).fetchone()
+        if existing:
+            return str(existing["project_id"])
+
         project_id = str(uuid4())
-        project_path = self._normalize_project_path(path)
         with self.conn:
             try:
                 self.cursor.execute(
                     """
-                    INSERT INTO projects(project_id, project_name, project_path)
-                    VALUES (?, ?, ?);
+                    INSERT INTO projects(project_id, project_name)
+                    VALUES (?, ?);
                     """,
-                    (project_id, name, project_path),
+                    (project_id, project_name),
                 )
             except sqlite3.IntegrityError as e:
-                raise ValueError(f"Проект с путём уже существует: {project_path}") from e
+                raise ValueError("Не удалось создать проект из-за конфликта данных.") from e
         return project_id
 
-    def get_project_by_path(self, path: str) -> Optional[Dict[str, Any]]:
-        project_path = self._normalize_project_path(path)
+    def get_project_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        project_name = self._normalize_project_name(name)
+        if not project_name:
+            return None
         row = self.cursor.execute(
             """
-            SELECT project_id, project_name, project_path, created_at
+            SELECT project_id, project_name, created_at
             FROM projects
-            WHERE project_path = ?
+            WHERE lower(trim(project_name)) = lower(trim(?))
+            ORDER BY datetime(created_at) DESC
             LIMIT 1;
             """,
-            (project_path,),
+            (project_name,),
         ).fetchone()
         return dict(row) if row else None
 
-    def get_project_by_id(self, project_id: str) -> Optional[Dict[str, Any]]:
+    def update_project_last_opened(self, project_id: Optional[str]) -> None:
+        """
+        Обновляет поле last_time_opened для указанного проекта текущим временем.
+        Если project_id не задан, метод ничего не делает.
+        """
+        if not project_id:
+            return
+
+        with self.conn:
+            self.cursor.execute(
+                """
+                UPDATE projects
+                SET last_time_opened = datetime('now')
+                WHERE project_id = ?;
+                """,
+                (project_id,),
+            )
+
+    def get_last_opened_project(self) -> Optional[Dict[str, Any]]:
+        """
+        Возвращает последний открытый проект по полю last_time_opened.
+        При отсутствии значения last_time_opened используется created_at.
+        """
         row = self.cursor.execute(
             """
-            SELECT project_id, project_name, project_path, created_at
+            SELECT project_id,
+                   project_name,
+                   created_at,
+                   last_time_opened
+            FROM projects
+            ORDER BY COALESCE(last_time_opened, created_at) DESC,
+                     created_at DESC,
+                     rowid DESC
+            LIMIT 1;
+            """
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        row = self.cursor.execute(
+            """
+            SELECT project_id, project_name, created_at
             FROM projects
             WHERE project_id = ?
             LIMIT 1;
@@ -312,17 +262,146 @@ class DbStorage:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_project_by_id(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Legacy alias for callers that still use old method name.
+        """
+        return self.get_project(project_id)
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """
+        Возвращает список всех проектов.
+
+        Каждый элемент списка — словарь с ключами:
+        project_id, project_name, created_at.
+        """
+        rows = self.cursor.execute(
+            """
+            SELECT project_id, project_name, created_at
+            FROM projects
+            ORDER BY datetime(created_at) DESC, project_name ASC;
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_file_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """
+        Возвращает запись из таблицы files по нормализованному пути к файлу.
+        Если таблица не имеет колонки file_path (старые БД) или произошла SQL-ошибка,
+        возвращает None.
+        """
+        # Старые БД могут не иметь колонки file_path — в этом случае просто выходим.
+        if not self._table_has_column("files", "file_path"):
+            return None
+
+        normalized_path = self._normalize_file_path(file_path)
+        try:
+            row = self.cursor.execute(
+                """
+                SELECT file_id,
+                       file_name,
+                       borehole_id,
+                       part_of_file_id,
+                       creation_date,
+                       data,
+                       file_path
+                FROM files
+                WHERE file_path = ?
+                LIMIT 1;
+                """,
+                (normalized_path,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Например, если таблицы files ещё нет или схема неожиданно отличается.
+            return None
+
+        return dict(row) if row else None
+
+    def upsert_file_data(
+        self,
+        borehole_id: str,
+        file_path: str,
+        file_name: str,
+        part_of_file_id: int,
+        payload: Dict[str, Any],
+    ) -> Optional[str]:
+        """
+        Создаёт или обновляет запись о файле по его нормализованному пути.
+
+        Если колонка file_path отсутствует (старые БД) или происходит SQL-ошибка,
+        метод тихо ничего не делает и возвращает None.
+        """
+        if not self._table_has_column("files", "file_path"):
+            return None
+
+        normalized_path = self._normalize_file_path(file_path)
+        serialized = json.dumps(payload, ensure_ascii=False)
+
+        try:
+            with self.conn:
+                existing = self.cursor.execute(
+                    "SELECT file_id FROM files WHERE file_path = ? LIMIT 1;",
+                    (normalized_path,),
+                ).fetchone()
+
+                if existing:
+                    file_id = existing["file_id"]
+                    self.cursor.execute(
+                        """
+                        UPDATE files
+                        SET file_name = ?,
+                            borehole_id = ?,
+                            part_of_file_id = ?,
+                            creation_date = datetime('now'),
+                            data = ?
+                        WHERE file_path = ?;
+                        """,
+                        (
+                            file_name,
+                            borehole_id,
+                            int(part_of_file_id),
+                            serialized,
+                            normalized_path,
+                        ),
+                    )
+                    return str(file_id)
+
+                file_id = str(uuid4())
+                self.cursor.execute(
+                    """
+                    INSERT INTO files(
+                        file_id,
+                        file_name,
+                        borehole_id,
+                        part_of_file_id,
+                        creation_date,
+                        data,
+                        file_path
+                    )
+                    VALUES (?, ?, ?, ?, datetime('now'), ?, ?);
+                    """,
+                    (
+                        file_id,
+                        file_name,
+                        borehole_id,
+                        int(part_of_file_id),
+                        serialized,
+                        normalized_path,
+                    ),
+                )
+                return file_id
+        except sqlite3.OperationalError:
+            # Если таблица/колонки отсутствуют или схема несовместима — просто не кешируем файл.
+            return None
+
     def get_or_create_borehole_for_project(
         self,
         project_id: str,
         borehole_name: str,
-        length: Optional[float] = None,
-        depth: Optional[float] = None,
-        fissure_inside: Optional[bool] = None,
     ) -> Dict[str, Any]:
         row = self.cursor.execute(
             """
-            SELECT borehole_id, borehole_name, length, depth, fissure_inside, project_id
+            SELECT borehole_id, borehole_name, project_id
             FROM boreholes
             WHERE project_id = ? AND borehole_name = ?
             LIMIT 1;
@@ -336,24 +415,18 @@ class DbStorage:
         with self.conn:
             self.cursor.execute(
                 """
-                INSERT INTO boreholes(borehole_id, borehole_name, length, depth, fissure_inside, project_id)
-                VALUES (?, ?, ?, ?, ?, ?);
+                INSERT INTO boreholes(borehole_id, borehole_name, project_id)
+                VALUES (?, ?, ?);
                 """,
                 (
                     borehole_id,
                     borehole_name,
-                    length,
-                    depth,
-                    None if fissure_inside is None else (1 if fissure_inside else 0),
                     project_id,
                 ),
             )
         return {
             "borehole_id": borehole_id,
             "borehole_name": borehole_name,
-            "length": length,
-            "depth": depth,
-            "fissure_inside": None if fissure_inside is None else (1 if fissure_inside else 0),
             "project_id": project_id,
         }
 
@@ -444,3 +517,59 @@ class DbStorage:
                             int(st.get("sort_order", step_order)),
                         ),
                     )
+
+    def replace_frequency_characteristics_for_borehole(
+        self,
+        borehole_id: str,
+        rows: List[tuple[str, int]],
+    ) -> None:
+        """
+        Replaces all frequency_characteristics rows for the borehole.
+
+        rows items are tuples: (file_id, frequency_characteristic_id).
+        """
+        with self.conn:
+            self.cursor.execute(
+                "DELETE FROM frequency_characteristics WHERE borehole_id = ?;",
+                (borehole_id,),
+            )
+            if not rows:
+                return
+            self.cursor.executemany(
+                """
+                INSERT INTO frequency_characteristics(borehole_id, file_id, frequency_characteristic_id)
+                VALUES (?, ?, ?);
+                """,
+                [
+                    (borehole_id, str(file_id), int(frequency_characteristic_id))
+                    for file_id, frequency_characteristic_id in rows
+                ],
+            )
+
+    def replace_wind_roses_for_borehole(
+        self,
+        borehole_id: str,
+        rows: List[tuple[str, int, int]],
+    ) -> None:
+        """
+        Replaces all wind_roses rows for the borehole.
+
+        rows items are tuples: (file_id, wind_rose_id, measurement_id).
+        """
+        with self.conn:
+            self.cursor.execute(
+                "DELETE FROM wind_roses WHERE borehole_id = ?;",
+                (borehole_id,),
+            )
+            if not rows:
+                return
+            self.cursor.executemany(
+                """
+                INSERT INTO wind_roses(borehole_id, file_id, wind_rose_id, measurement_id)
+                VALUES (?, ?, ?, ?);
+                """,
+                [
+                    (borehole_id, str(file_id), int(wind_rose_id), int(measurement_id))
+                    for file_id, wind_rose_id, measurement_id in rows
+                ],
+            )

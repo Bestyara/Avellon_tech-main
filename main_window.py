@@ -5,18 +5,17 @@ from uuid import uuid4
 from time import gmtime, strftime
 from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QCheckBox, \
     QVBoxLayout, QHBoxLayout, QPushButton, QDialog, QFormLayout, QLayout, QMenuBar, \
-    QTableWidget, QTableWidgetItem, QLabel, QSlider, QLineEdit, QComboBox
+    QTableWidget, QTableWidgetItem, QListWidget, QListWidgetItem, QLabel, QSlider, QLineEdit, QComboBox
 from PySide6.QtGui import QScreen, QIcon, QPixmap, QIntValidator, QDoubleValidator, QPainter, QPen
 from PySide6.QtCore import Qt, QPoint, QSize, QRect, QLine
 from PySide6.QtWidgets import QAbstractItemView
 
 from db_storage import DbStorage
-from graph_widget import OscilloscopeGraphWidget, AmplitudeTimeGraphWidget, \
+from graph_widget import XYDataFrame, OscilloscopeGraphWidget, AmplitudeTimeGraphWidget, \
     FrequencyResponseGraphWidget, WindRoseGraphWidget, DepthResponseGraphWidget
 from third_party import AbstractFunctor, HelpInfoDialog, SimpleItemListWidget, \
-    select_path_to_files, select_path_to_dir, ListWidget, AbstractWindowWidget, \
-    MyCheckBox, ButtonWidget, MessageBox, get_last_project_id, save_last_project_id, \
-    AbstractToolDialog, FrequencyFilterDialog, AxisXDialog
+    select_path_to_files, ListWidget, AbstractWindowWidget, \
+    MyCheckBox, ButtonWidget, MessageBox, AbstractToolDialog, FrequencyFilterDialog, AxisXDialog
 from loadlabel import loading
 from borehole_logic import *
 from converter import ConverterDialog
@@ -82,57 +81,54 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(cf.ICON_WINDOW_PATH))
 
     def __cache_init(self) -> None:
-        # Новый кэш: project_id -> project_path через БД.
-        last_project_id = get_last_project_id()
-        if last_project_id is not None:
-            project = self.db.get_project_by_id(last_project_id)
-            if project and os.path.isdir(project["project_path"]):
-                self.run_borehole_menu(project["project_path"], project_id=project["project_id"])
-                return
+        # Мягко очищаем устаревший файловый кэш (если он есть), не ломая запуск.
+        try:
+            if os.path.isfile(cf.CACHE_FILE_LAST_PROJECT_ID_PATH):
+                os.remove(cf.CACHE_FILE_LAST_PROJECT_ID_PATH)
+            if os.path.isdir(cf.CACHE_DIR_PATH):
+                try:
+                    os.rmdir(cf.CACHE_DIR_PATH)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+        # Используем информацию о последнем проекте только из БД.
+        project = self.db.get_last_opened_project()
+        if project and project.get("project_id"):
+            self.db.update_project_last_opened(project["project_id"])
+            self.run_borehole_menu(project_id=project["project_id"])
+            return
 
         self.run_main_menu()
 
     def __cache_save_project_id(self, project_id_: str) -> None:
         if project_id_ is None:
             return
-        save_last_project_id(project_id_)
+        self.db.update_project_last_opened(project_id_)
 
     def run_main_menu(self) -> None:
+        XYDataFrame.set_active_borehole_id(None)
         self.setWindowTitle(cf.MAIN_WINDOW_TITLE)
         self.setCentralWidget(MainMenuWidget(self))
 
-    def run_borehole_menu(self, project_path: str, project_id: str = None) -> None:
-        if project_id is None and project_path is not None:
-            project = self.db.get_project_by_path(project_path)
-            project_id = None if project is None else project["project_id"]
+    def run_borehole_menu(self, project_id: str = None) -> None:
+        if project_id is None:
+            return
         self.__cache_save_project_id(project_id)
-        self.setCentralWidget(BoreholeMenuWindowWidget(project_path, self))
-
-    def open_project_by_path(self, project_path: str) -> None:
-        if project_path is None or len(project_path) < 1:
-            return
-        if not os.path.isdir(project_path):
-            MessageBox().warning(cf.NOT_DIR_WARNING_TITTLE, cf.NOT_DIR_WARNING_MESSAGE_F(project_path))
-            return
-
-        project = self.db.get_project_by_path(project_path)
-        if project is None:
-            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE,
-                                 cf.PROJECT_NOT_REGISTERED_WARNING_MESSAGE_F(project_path))
-            return
-
-        self.run_borehole_menu(project["project_path"], project_id=project["project_id"])
+        self.setCentralWidget(BoreholeMenuWindowWidget(project_id, self))
 
     def open_last_project(self) -> None:
-        last_project_id = get_last_project_id()
-        if last_project_id is None:
-            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE, "Не найден кэш последнего проекта.")
+        project = self.db.get_last_opened_project()
+        if not project:
+            MessageBox().warning(
+                cf.PROJECT_NOT_REGISTERED_WARNING_TITLE,
+                "Не найден ни один ранее открытый проект.",
+            )
             return
-        project = self.db.get_project_by_id(last_project_id)
-        if project is None or not os.path.isdir(project["project_path"]):
-            MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE, "Последний проект не найден в БД или папка была удалена.")
-            return
-        self.run_borehole_menu(project["project_path"], project_id=project["project_id"])
+
+        self.db.update_project_last_opened(project["project_id"])
+        self.run_borehole_menu(project_id=project["project_id"])
 
     def exit(self) -> None:
         self.app.exit()
@@ -187,10 +183,16 @@ class MainMenuWidget(QWidget):
         self.main_window.open_last_project()
 
     def open_project_action(self) -> None:
-        project_path = select_path_to_dir(self)
-        if len(project_path) < 1:
+        dialog = OpenProjectDialog(self.main_window)
+        result = dialog.exec()
+        if result != QDialog.Accepted:
             return
-        self.main_window.open_project_by_path(project_path)
+
+        project_id = dialog.selected_project_id()
+        if not project_id:
+            return
+
+        self.main_window.run_borehole_menu(project_id=project_id)
 
     def update_action(self) -> None:
         if pathlib.Path(cf.EXE_FILENAME).is_file():
@@ -202,25 +204,15 @@ class MainMenuWidget(QWidget):
 
 
 class CreateProjectDialog(AbstractToolDialog):
-    @staticmethod
-    def get_project_name(parent_path_: str, name_: str, num_: int = 0) -> str:
-        tmp_name = f'{name_}_{num_}'
-        for filename in pathlib.Path(parent_path_).glob('*'):
-            if os.path.basename(filename) == tmp_name:
-                return CreateProjectDialog.get_project_name(parent_path_, name_, num_ + 1)
-        return tmp_name
 
     def __init__(self, main_menu_widget_: MainMenuWidget):
         super().__init__(cf.CREATE_PROJECT_DIALOG_TITLE, main_menu_widget_)
         self.main_menu_widget = main_menu_widget_
-        self.parent_path = str(pathlib.Path().resolve() / cf.DEFAULT_PROJECT_FOLDER)
-        self.project_name = CreateProjectDialog.get_project_name(self.parent_path, cf.DEFAULT_PROJECT_NAME)
+        self.project_name = cf.DEFAULT_PROJECT_NAME
         self.setMinimumWidth(800)
         self.setWindowModality(Qt.ApplicationModal)
 
         self.name_editor = QLineEdit(self)
-        self.some_editor = QLineEdit(self)
-        self.path_editor = DirPathEdit(self.parent_path, self.project_name, self.path_edit_action, self)
         self.__editors_init()
 
         self.accept_button = QPushButton("Создать", self)
@@ -237,14 +229,9 @@ class CreateProjectDialog(AbstractToolDialog):
         self.name_editor.setText(self.project_name)
         self.name_editor.textChanged.connect(self.project_name_edit_action)
 
-        self.some_editor.setAlignment(Qt.AlignLeft)
-        self.some_editor.textChanged.connect(self.some_edit_action)
-
     def __all_widgets_to_layout(self) -> None:
         flo = QFormLayout()
         flo.addRow("Название", self.name_editor)
-        flo.addRow("???", self.some_editor)
-        flo.addRow("Путь", self.path_editor)
 
         tmp_layout = QHBoxLayout()
         tmp_layout.addWidget(self.accept_button)
@@ -256,24 +243,7 @@ class CreateProjectDialog(AbstractToolDialog):
         self.setLayout(core_layout)
 
     def project_name_edit_action(self, text_: str) -> None:
-        self.project_name = self.path_editor.name = os.path.basename(text_)
-        if len(self.project_name):
-            self.parent_path = self.path_editor.parent_path = str((pathlib.Path(self.parent_path) / text_).parent)
-        else:
-            self.parent_path = self.path_editor.parent_path = str(pathlib.Path(self.parent_path) / text_)
-        if self.name_editor.text() != self.project_name:
-            self.name_editor.setText(self.project_name)
-        self.path_editor.path_editor.setText(self.parent_path + '/' + self.project_name)
-
-    def some_edit_action(self, text_: str) -> None:
-        pass
-
-    def path_edit_action(self, text_: str) -> None:
-        self.project_name = self.path_editor.name = os.path.basename(text_)
-        if len(self.project_name):
-            self.parent_path = self.path_editor.parent_path = str(pathlib.Path(text_).parent)
-        else:
-            self.parent_path = self.path_editor.parent_path = str(pathlib.Path(text_))
+        self.project_name = os.path.basename(text_)
         if self.name_editor.text() != self.project_name:
             self.name_editor.setText(self.project_name)
 
@@ -284,63 +254,138 @@ class CreateProjectDialog(AbstractToolDialog):
         if self.project_name.find(' ') != -1:
             MessageBox().warning(cf.INVALID_NAME_WARNING_TITTLE, cf.INVALID_PROJECT_NAME_WARNING_MESSAGE)
             return
-        path = str(pathlib.Path(self.parent_path) / self.project_name)
-        is_exist = os.path.exists(path)
-        if is_exist:
-            if not os.path.isdir(path):
-                MessageBox().warning(cf.NOT_DIR_WARNING_TITTLE, cf.NOT_DIR_WARNING_MESSAGE_F(path))
-                return
-            if len([f for f in pathlib.Path(path).glob('*')]):
-                MessageBox().warning(cf.NOT_EMPTY_FOLDER_WARNING_TITLE, cf.NOT_EMPTY_FOLDER_WARNING_MESSAGE_F(path))
-                return
-        else:
-            os.mkdir(path)
 
-        # Регистрируем проект в БД (папка может остаться для привычного UX).
         try:
-            project_id = self.main_menu_widget.main_window.db.create_project(self.project_name, path)
+            project_id = self.main_menu_widget.main_window.db.create_project(self.project_name)
             self.main_menu_widget.main_window.db.get_or_create_borehole_for_project(project_id, self.project_name)
         except Exception as e:
             MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, str(e))
             return
 
-        self.main_menu_widget.main_window.run_borehole_menu(path, project_id=project_id)
+        self.main_menu_widget.main_window.run_borehole_menu(project_id=project_id)
         self.close()
 
     def run(self) -> None:
-        self.parent_path = str(pathlib.Path().resolve() / cf.DEFAULT_PROJECT_FOLDER)
-        self.project_name = CreateProjectDialog.get_project_name(self.parent_path, cf.DEFAULT_PROJECT_NAME)
-        self.path_editor.path_editor.setText(self.parent_path + '/' + self.project_name)
+        self.project_name = cf.DEFAULT_PROJECT_NAME
+        self.name_editor.setText(self.project_name)
         self.exec()
 
 
-class DirPathEdit(QWidget):
-    def __init__(self, parent_path_: str, name_: str, action_, parent_: QWidget = None):
-        super().__init__(parent_)
-        self.id = uuid4()
-        self.parent_path = parent_path_
-        self.name = name_
+class OpenProjectDialog(QDialog):
+    """
+    Диалог выбора проекта из БД.
+    Отображает список проектов в таблице и позволяет выбрать проект
+    двойным кликом по строке или кнопкой «Открыть».
+    """
 
-        self.path_editor = QLineEdit(self)
-        self.path_editor.setAlignment(Qt.AlignLeft)
-        self.path_editor.setText(str(pathlib.Path(self.parent_path) / self.name))
-        self.path_editor.textChanged.connect(action_)
+    def __init__(self, main_window_: MainWindow):
+        super().__init__(main_window_)
+        self.main_window = main_window_
+        self.db = getattr(main_window_, "db", None)
+        self._selected_project = None
 
-        self.select_path_button = QPushButton("...", self)
-        self.select_path_button.setMaximumWidth(30)
-        self.select_path_button.clicked.connect(self.select_path_action)
+        self.setWindowTitle("Открыть проект")
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setMinimumSize(600, 400)
 
-        self.__all_widgets_to_layout()
+        self.list_widget = QListWidget(self)
+        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_widget.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.list_widget.itemDoubleClicked.connect(self._handle_double_click)
 
-    def __all_widgets_to_layout(self) -> None:
-        core_layout = QHBoxLayout()
-        core_layout.addWidget(self.path_editor)
-        core_layout.addWidget(self.select_path_button)
+        self.open_button = QPushButton("Открыть", self)
+        self.open_button.setEnabled(False)
+        self.open_button.setDefault(True)
+        self.open_button.setAutoDefault(True)
+        self.open_button.clicked.connect(self._handle_open_clicked)
+
+        self.cancel_button = QPushButton("Отмена", self)
+        self.cancel_button.setShortcut("Shift+Esc")
+        self.cancel_button.clicked.connect(self.reject)
+
+        self.list_widget.itemSelectionChanged.connect(self._update_open_button_state)
+
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addStretch()
+        buttons_layout.addWidget(self.open_button)
+        buttons_layout.addWidget(self.cancel_button)
+
+        core_layout = QVBoxLayout()
+        core_layout.setContentsMargins(12, 12, 12, 12)
+        core_layout.setSpacing(10)
+        buttons_layout.setSpacing(8)
+        core_layout.addWidget(self.list_widget)
+        core_layout.addLayout(buttons_layout)
         self.setLayout(core_layout)
 
-    def select_path_action(self) -> None:
-        self.path_editor.setText(str(pathlib.Path(select_path_to_dir(self.parent(), dir=self.parent_path)) / self.name))
+        self._load_projects()
 
+    def _load_projects(self) -> None:
+        """Загружает список проектов из БД в список."""
+        self.list_widget.clear()
+        if self.db is None:
+            return
+        try:
+            projects = self.db.list_projects()
+        except Exception as e:
+            MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, str(e))
+            return
+
+        # Сортируем проекты по имени (с запасным вариантом по id)
+        def _project_sort_key(p):
+            name = p.get("project_name") or ""
+            project_id = p.get("project_id") or ""
+            return name.lower(), project_id.lower()
+
+        projects.sort(key=_project_sort_key)
+
+        for project in projects:
+            name = project.get("project_name") or project.get("project_id") or ""
+            item = QListWidgetItem(name, self.list_widget)
+            item.setData(Qt.UserRole, project)
+            item.setToolTip(name)
+
+        self._update_open_button_state()
+
+    def _current_project(self):
+        """Возвращает словарь проекта для текущего выбранного элемента или None."""
+        item = self.list_widget.currentItem()
+        if item is None:
+            return None
+        return item.data(Qt.UserRole)
+
+    def _update_open_button_state(self) -> None:
+        """Обновляет доступность кнопки «Открыть» в зависимости от выбора."""
+        project = self._current_project()
+        self.open_button.setEnabled(bool(project and project.get("project_id")))
+
+    def _handle_double_click(self, _item) -> None:
+        """Обрабатывает двойной клик по элементу списка."""
+        self._accept_with_current_project()
+
+    def _handle_open_clicked(self) -> None:
+        """Обрабатывает нажатие кнопки «Открыть»."""
+        self._accept_with_current_project()
+
+    def _accept_with_current_project(self) -> None:
+        """Пытается принять диалог с текущим выбранным проектом."""
+        project = self._current_project()
+        if not project:
+            return
+
+        self._selected_project = project
+        self.accept()
+
+    def selected_project(self):
+        """Возвращает выбранный проект (dict) после успешного выполнения exec()."""
+        return self._selected_project
+
+    def selected_project_id(self):
+        """Возвращает project_id выбранного проекта или None."""
+        project = self.selected_project()
+        if not project:
+            return None
+        return project.get("project_id")
 
 class BoreholeMenuWindowWidget(QWidget):
     class TopMenuBarInit:
@@ -382,28 +427,27 @@ class BoreholeMenuWindowWidget(QWidget):
         def __view_menu_init(self) -> None:
             pass
 
-    def __init__(self, path_: str, main_window_: MainWindow):
+    def __init__(self, project_id_: str, main_window_: MainWindow):
         super().__init__(main_window_)
         self.id = uuid4()
-        if path_ is None or len(os.path.basename(path_)) < 1:
-            MessageBox().warning(cf.EMPTY_NAME_WARNING_TITTLE, cf.EMPTY_PROJECT_NAME_WARNING_MESSAGE)
-            main_window_.run_main_menu()
-            return
-        self.name = os.path.basename(path_)
         self.main_window = main_window_
-        self.main_window.setWindowTitle(self.name + " - скважина")
 
-        project = self.main_window.db.get_project_by_path(path_)
+        project = self.main_window.db.get_project(project_id_)
         if project is None:
             MessageBox().warning(cf.PROJECT_NOT_REGISTERED_WARNING_TITLE,
-                                 cf.PROJECT_NOT_REGISTERED_WARNING_MESSAGE_F(path_))
+                                 f"Проект не найден в БД (id: {project_id_}).")
             main_window_.run_main_menu()
             return
+
+        self.name = project.get("project_name") or "Проект"
+        self.main_window.setWindowTitle(self.name + " - скважина")
 
         borehole_row = self.main_window.db.get_or_create_borehole_for_project(project["project_id"], self.name)
         self.borehole_id = borehole_row["borehole_id"]
+        XYDataFrame.set_active_borehole_id(self.borehole_id)
 
-        self.borehole = Borehole(self.name, str(pathlib.Path(path_).parent), id_=self.borehole_id)
+        # В DB-only режиме путь проекта не обязателен; используем текущую директорию как техническую.
+        self.borehole = Borehole(self.name, str(pathlib.Path().resolve()), id_=self.borehole_id)
         self.borehole.load_from_db(self.main_window.db, self.borehole_id)
         self.borehole_dialog = BoreHoleDialog(self.borehole, self)
         self.converter_dialog = ConverterDialog(self)
@@ -577,66 +621,56 @@ class BoreHoleDialog(AbstractToolDialog):
         self.add_section(cf.DEFAULT_SECTION_NAME + str(max_section_number + 1))
 
     def save_all_sections(self, up_path_: str) -> None:
-        borehole_path = self.borehole.path()
-        for filename in pathlib.Path(borehole_path).glob('*'):
-            is_inside_widget_list = False
-            file_base_name = os.path.basename(filename)
-            if os.path.isdir(filename):
-                for section in self.section_list_widget.widget_list:
-                    if section.name == file_base_name:
-                        is_inside_widget_list = True
-                        break
-            if not is_inside_widget_list:
-                if os.path.isdir(filename):
-                    shutil.rmtree(filename)
-                else:
-                    os.remove(filename)
-        for section in self.section_list_widget.widget_list:
-            section.save_all(borehole_path)
+        # DB-only mode: структура и ссылки на файлы собираются из виджетов,
+        # без копирования в локальные папки проекта.
+        return
+
+    def _rebuild_borehole_from_widgets(self) -> None:
+        self.borehole.section_list.clear()
+        for section_w in self.section_list_widget.widget_list:
+            section = Section(
+                section_w.name,
+                self.borehole.path(),
+                int(section_w.depth),
+                float(section_w.length),
+                section_w.id,
+            )
+            section.select(section_w.is_selected())
+            section.step_list.clear()
+
+            for step_w in section_w.step_list.widget_list:
+                step = Step(int(step_w.number), section.path(), step_w.id)
+                step.select(step_w.is_selected())
+                step.data_list.clear()
+
+                for file_w in step_w.file_list.widget_list:
+                    source_path = file_w.path
+                    if not os.path.isabs(source_path):
+                        continue
+                    if not os.path.isfile(source_path):
+                        continue
+                    data_file = DataFile(
+                        os.path.basename(source_path),
+                        os.path.dirname(source_path),
+                        file_w.id,
+                    )
+                    data_file.select(file_w.is_selected())
+                    step.data_list.append(data_file)
+
+                section.step_list.append(step)
+
+            self.borehole.section_list.append(section)
 
     @loading('cancel_action')
     def accept_action(self) -> None:
-        self.save_all_sections(self.borehole.up_path)
+        self._rebuild_borehole_from_widgets()
+        # Сохраняем содержимое файлов в БД отдельно, чтобы ошибки на отдельных
+        # файлах не мешали сохранению структуры скважины.
+        try:
+            self.borehole.save_files_to_db()
+        except Exception as e:
+            MessageBox().warning(cf.UNKNOWN_WARNING_TITLE, str(e))
 
-        print('______________________________')
-        print("Widget")
-        for section in self.section_list_widget.widget_list:
-            print('sec\t', section.name)
-            for step in section.step_list.widget_list:
-                print('\tstep\t', step.number)
-                for file in step.file_list.widget_list:
-                    print('\t\tf\t', file.path)
-
-        self.borehole.correlate_data()
-
-        print('______________________________')
-        print("OUT:", self.borehole.path())
-        for section in self.borehole.section_list:
-            for section_w in self.section_list_widget.widget_list:
-                if section.name == section_w.name:
-                    section.select(section_w.is_selected())
-                    for step in section.step_list:
-                        for step_w in section_w.step_list.widget_list:
-                            if step_w.number == step.number:
-                                step.select(step_w.is_selected())
-                                for file in step.data_list:
-                                    for file_w in step_w.file_list.widget_list:
-                                        if file.name == os.path.basename(file_w.path):
-                                            file.select(file_w.is_selected())
-                                            break
-                                break
-                    break
-
-            print('sec\t', section.path())
-            for step in section.step_list:
-                print('\tstep\t', step.path())
-                for file in step.data_list:
-                    print('\t\tf\t', file.path())
-            for section_w in self.section_list_widget.widget_list:
-                if section.name == section_w.name:
-                    section.depth = section_w.depth
-                    section.length = section_w.length
-        print('______________________________')
         # Сохраняем структуру секций/шагов в БД.
         try:
             parent = self.parent()
@@ -1659,6 +1693,30 @@ class FrequencyResponseGraphWindowWidget(AbstractGraphWindowWidget):
                 self.hide_line_dialog.add_checkbox(section_name + '=' + dataframe.name,
                                                    CheckBoxHideFunctor(dataframe, self), True)
         self.replot_for_new_data()
+        self._persist_frequency_characteristics_links()
+
+    def _persist_frequency_characteristics_links(self) -> None:
+        db = getattr(self.borehole_window.main_window, "db", None)
+        borehole_id = getattr(self.borehole_window, "borehole_id", None)
+        borehole = getattr(self.borehole_window, "borehole", None)
+        if db is None or borehole_id is None or borehole is None:
+            return
+
+        rows = []
+        for section in borehole.section_list:
+            for step in section.step_list:
+                for data_file in step.data_list:
+                    if data_file.sensor_num < 0:
+                        continue
+                    file_row = db.get_file_by_path(data_file.path())
+                    if file_row is None:
+                        continue
+                    rows.append((str(file_row["file_id"]), int(data_file.sensor_num)))
+
+        try:
+            db.replace_frequency_characteristics_for_borehole(borehole_id, rows)
+        except Exception as exc:
+            print(f"Ошибка сохранения frequency_characteristics: {exc}")
 
     def run_crack_dialog_action(self) -> None:
         self.cracks_dialog.run()
@@ -1990,6 +2048,7 @@ class WindRoseGraphWindowWidget(AbstractGraphWindowWidget):
             self.slider.setValue(1)
         else:
             self.replot_for_new_data()
+        self._persist_wind_rose_links()
 
     def replot_for_new_data(self) -> None:
         self.plot_widget.clear()
@@ -2001,6 +2060,35 @@ class WindRoseGraphWindowWidget(AbstractGraphWindowWidget):
                 max_range = max(max_range, len(dataframe.data['y']))
         self.slider.setRange(1, max_range)
         self.plot_widget.set_data(self.data_frames, self.slider.value() - 1, self.is_relative)
+
+    def _persist_wind_rose_links(self) -> None:
+        db = getattr(self.borehole_window.main_window, "db", None)
+        borehole_id = getattr(self.borehole_window, "borehole_id", None)
+        borehole = getattr(self.borehole_window, "borehole", None)
+        if db is None or borehole_id is None or borehole is None:
+            return
+
+        rows = []
+        for section in borehole.section_list:
+            for step in section.step_list:
+                for data_file in step.data_list:
+                    if data_file.sensor_num < 0 or data_file.measurement_num < 0:
+                        continue
+                    file_row = db.get_file_by_path(data_file.path())
+                    if file_row is None:
+                        continue
+                    rows.append(
+                        (
+                            str(file_row["file_id"]),
+                            int(data_file.sensor_num),
+                            int(data_file.measurement_num),
+                        )
+                    )
+
+        try:
+            db.replace_wind_roses_for_borehole(borehole_id, rows)
+        except Exception as exc:
+            print(f"Ошибка сохранения wind_roses: {exc}")
 
     def change_relative_mode_action(self, state_: bool) -> None:
         CheckBoxAbsoluteValueWindRoseFunctor(self).action(state_)
