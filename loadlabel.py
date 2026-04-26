@@ -39,7 +39,6 @@ class LoadWorker(QObject):
     complete = Signal(list)
 
     def run(self, func_: classmethod, args: tuple, kwargs: dict) -> None:
-        print("Start Work in other Thread")
         try:
             result = func_(*args, **kwargs)
             self.complete.emit([result])

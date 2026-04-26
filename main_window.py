@@ -644,18 +644,10 @@ class BoreHoleDialog(AbstractToolDialog):
                 step.data_list.clear()
 
                 for file_w in step_w.file_list.widget_list:
-                    source_path = file_w.path
-                    if not os.path.isabs(source_path):
-                        continue
-                    if not os.path.isfile(source_path):
-                        continue
-                    data_file = DataFile(
-                        os.path.basename(source_path),
-                        os.path.dirname(source_path),
-                        file_w.id,
-                    )
-                    data_file.select(file_w.is_selected())
-                    step.data_list.append(data_file)
+                    source_path = str(file_w.path or "")
+                    step.add_file(source_path, file_w.id)
+                    if step.data_list:
+                        step.data_list[-1].select(file_w.is_selected())
 
                 section.step_list.append(step)
 
@@ -691,7 +683,7 @@ class BoreHoleDialog(AbstractToolDialog):
                 step_w = section_w.step_list.widget_list[len(section_w.step_list.widget_list) - 1]
                 step_w.checkbox.setChecked(step.is_select)
                 for file in step.data_list:
-                    step_w.add_file(file.name, file.id)
+                    step_w.add_file(file.path(), file.id)
                     step_w.file_list.widget_list[len(step_w.file_list.widget_list) - 1] \
                         .checkbox.setChecked(file.is_select)
         print('______________________________')
@@ -1708,10 +1700,9 @@ class FrequencyResponseGraphWindowWidget(AbstractGraphWindowWidget):
                 for data_file in step.data_list:
                     if data_file.sensor_num < 0:
                         continue
-                    file_row = db.get_file_by_path(data_file.path())
-                    if file_row is None:
-                        continue
-                    rows.append((str(file_row["file_id"]), int(data_file.sensor_num)))
+                    file_id = getattr(data_file, "db_file_id", None)
+                    if file_id:
+                        rows.append((str(file_id), int(data_file.sensor_num)))
 
         try:
             db.replace_frequency_characteristics_for_borehole(borehole_id, rows)
@@ -2074,16 +2065,9 @@ class WindRoseGraphWindowWidget(AbstractGraphWindowWidget):
                 for data_file in step.data_list:
                     if data_file.sensor_num < 0 or data_file.measurement_num < 0:
                         continue
-                    file_row = db.get_file_by_path(data_file.path())
-                    if file_row is None:
-                        continue
-                    rows.append(
-                        (
-                            str(file_row["file_id"]),
-                            int(data_file.sensor_num),
-                            int(data_file.measurement_num),
-                        )
-                    )
+                    file_id = getattr(data_file, "db_file_id", None)
+                    if file_id:
+                        rows.append((str(file_id), int(data_file.sensor_num), int(data_file.measurement_num)))
 
         try:
             db.replace_wind_roses_for_borehole(borehole_id, rows)

@@ -11,13 +11,16 @@ import config as cf
 
 
 class DataFile:
-    def __init__(self, name_: str, step_path_: str, id_: str = None):
+    def __init__(self, name_: str, step_path_: str, id_: str = None, db_file_id_: str = None):
         self.name = name_
         self.step_path = step_path_
 
         self.id = id_
         if self.id is None:
             self.id = uuid4()
+        # Важно: id_ объекта в UI не равен file_id в таблице files.
+        # db_file_id заполняется только когда запись реально есть в БД.
+        self.db_file_id = str(db_file_id_) if db_file_id_ is not None else None
         self.measurement_num, self.sensor_num = get_num_file_by_default(os.path.basename(self.name),
                                                                         cf.DEFAULT_SENSOR_AMOUNT)
         self.max_value = None
@@ -54,9 +57,11 @@ class DataFile:
             self.max_value = None
             self.min_value = None
             return None
-        xy_dataframe = XYDataFrame(self.path())
+        xy_dataframe = XYDataFrame(self.path(), file_id_=self.db_file_id)
         if not xy_dataframe.active:
             return None
+        if xy_dataframe.db_file_id:
+            self.db_file_id = str(xy_dataframe.db_file_id)
         self.max_value = xy_dataframe.max_y
         self.min_value = xy_dataframe.min_y
         return xy_dataframe
@@ -100,23 +105,37 @@ class Step:
         for data_file in self.data_list:
             data_file.select(is_select_)
 
-    def add_file(self, file_name_: str, id_: str = None) -> None:
+    def add_file(
+        self,
+        file_name_: str,
+        id_: str = None,
+        allow_virtual_: bool = False,
+        db_file_id_: str = None,
+    ) -> None:
         if id_ is not None:
             for data_file in self.data_list:
                 if data_file.id == id_:
                     return
         source_path = str(file_name_ or "")
-        if os.path.isabs(source_path) and os.path.isfile(source_path):
+        if os.path.isabs(source_path):
+            # DB-first режим: файл может физически отсутствовать, но данные доступны в БД по пути.
             self.data_list.append(
                 DataFile(
                     os.path.basename(source_path),
                     os.path.dirname(source_path),
                     id_,
+                    db_file_id_=db_file_id_,
                 )
             )
             return
-        if os.path.exists(self.path() + '/' + source_path):
-            self.data_list.append(DataFile(source_path, self.path(), id_))
+        relative_candidate = self.path() + '/' + source_path
+        if os.path.exists(relative_candidate):
+            self.data_list.append(DataFile(source_path, self.path(), id_, db_file_id_=db_file_id_))
+            return
+        if allow_virtual_ and len(source_path):
+            # DB-first: разрешаем виртуальную привязку файла без наличия на диске.
+            self.data_list.append(DataFile(source_path, self.path(), id_, db_file_id_=db_file_id_))
+            return
 
     def __remove_file_by_index(self, i_: int) -> None:
         self.data_list.pop(i_)
@@ -684,6 +703,52 @@ class Borehole:
                 for df in step_obj.data_list:
                     df.is_select = step_obj.is_select
 
+        # Восстанавливаем файлы шагов из таблицы files, чтобы графики строились из БД-состояния.
+        try:
+            file_rows = db_.list_files_for_borehole(borehole_id_)
+        except Exception:
+            file_rows = []
+
+        if not file_rows:
+            return
+
+        all_steps = []
+        step_map = {}
+        for section in self.section_list:
+            for step in section.step_list:
+                all_steps.append(step)
+                step_map[int(step.number)] = step
+
+        for row in file_rows:
+            file_path = str(row.get("file_path") or "").strip()
+            file_name = str(row.get("file_name") or "").strip()
+            file_id = row.get("file_id")
+            if not file_path and not file_name:
+                continue
+
+            target_step = None
+            part_of_file_id = row.get("part_of_file_id")
+            try:
+                target_step = step_map.get(int(part_of_file_id))
+            except Exception:
+                target_step = None
+
+            if target_step is None and len(all_steps) >= 1:
+                target_step = all_steps[0]
+
+            if target_step is None:
+                continue
+
+            preferred_ref = file_path if file_path else file_name
+            target_step.add_file(
+                preferred_ref,
+                id_=file_id,
+                allow_virtual_=True,
+                db_file_id_=file_id,
+            )
+            if target_step.data_list:
+                target_step.data_list[-1].select(bool(target_step.is_select))
+
     def save_to_db(self, db_, borehole_id_: str) -> None:
         if db_ is None or borehole_id_ is None:
             return
@@ -715,10 +780,12 @@ class Borehole:
             for step in section.step_list:
                 for data_file in step.data_list:
                     file_path = data_file.path()
-                    if not os.path.isfile(file_path):
+                    if not os.path.isfile(file_path) and not data_file.db_file_id:
                         continue
                     try:
-                        XYDataFrame(file_path)
+                        xy = XYDataFrame(file_path, file_id_=data_file.db_file_id)
+                        if xy.db_file_id:
+                            data_file.db_file_id = str(xy.db_file_id)
                     except Exception:
                         # Ошибка отдельного файла не должна останавливать общий проход.
                         continue

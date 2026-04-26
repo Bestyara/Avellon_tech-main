@@ -115,8 +115,7 @@ class DbStorage:
                 borehole_id TEXT NOT NULL REFERENCES boreholes (borehole_id) ON DELETE CASCADE,
                 part_of_file_id INTEGER NOT NULL,
                 creation_date TIMESTAMP,
-                data JSON NOT NULL,
-                file_path TEXT UNIQUE
+                data JSON NOT NULL
             );
             """
         )
@@ -284,38 +283,60 @@ class DbStorage:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_file_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
+    def get_file_by_id(self, file_id: str) -> Optional[Dict[str, Any]]:
         """
-        Возвращает запись из таблицы files по нормализованному пути к файлу.
-        Если таблица не имеет колонки file_path (старые БД) или произошла SQL-ошибка,
-        возвращает None.
+        Возвращает запись из таблицы files по file_id.
         """
-        # Старые БД могут не иметь колонки file_path — в этом случае просто выходим.
-        if not self._table_has_column("files", "file_path"):
+        if not file_id:
             return None
-
-        normalized_path = self._normalize_file_path(file_path)
+        has_file_path = self._table_has_column("files", "file_path")
+        select_file_path = ", file_path" if has_file_path else ""
         try:
             row = self.cursor.execute(
-                """
+                f"""
                 SELECT file_id,
                        file_name,
                        borehole_id,
                        part_of_file_id,
                        creation_date,
-                       data,
-                       file_path
+                       data
+                       {select_file_path}
                 FROM files
-                WHERE file_path = ?
+                WHERE file_id = ?
                 LIMIT 1;
                 """,
-                (normalized_path,),
+                (str(file_id),),
             ).fetchone()
         except sqlite3.OperationalError:
-            # Например, если таблицы files ещё нет или схема неожиданно отличается.
             return None
-
         return dict(row) if row else None
+
+    def list_files_for_borehole(self, borehole_id: str) -> List[Dict[str, Any]]:
+        """
+        Возвращает все файлы для скважины.
+        Нужен для восстановления ссылок на файлы при загрузке структуры из БД.
+        """
+        has_file_path = self._table_has_column("files", "file_path")
+        select_file_path = ", file_path" if has_file_path else ""
+        try:
+            rows = self.cursor.execute(
+                f"""
+                SELECT file_id,
+                       file_name,
+                       borehole_id,
+                       part_of_file_id,
+                       creation_date,
+                       data
+                       {select_file_path}
+                FROM files
+                WHERE borehole_id = ?
+                ORDER BY datetime(creation_date) DESC, rowid DESC;
+                """,
+                (borehole_id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [dict(r) for r in rows]
 
     def upsert_file_data(
         self,
@@ -324,39 +345,88 @@ class DbStorage:
         file_name: str,
         part_of_file_id: int,
         payload: Dict[str, Any],
+        file_id: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Создаёт или обновляет запись о файле по его нормализованному пути.
-
-        Если колонка file_path отсутствует (старые БД) или происходит SQL-ошибка,
-        метод тихо ничего не делает и возвращает None.
+        Создаёт или обновляет запись о файле.
+        При наличии file_id обновляет по идентификатору, иначе создаёт новую запись.
         """
-        if not self._table_has_column("files", "file_path"):
-            return None
-
-        normalized_path = self._normalize_file_path(file_path)
         serialized = json.dumps(payload, ensure_ascii=False)
+        normalized_path = None
+        try:
+            if file_path:
+                normalized_path = self._normalize_file_path(file_path)
+        except Exception:
+            normalized_path = None
 
         try:
             with self.conn:
-                existing = self.cursor.execute(
-                    "SELECT file_id FROM files WHERE file_path = ? LIMIT 1;",
-                    (normalized_path,),
-                ).fetchone()
+                if file_id:
+                    existing = self.cursor.execute(
+                        "SELECT file_id FROM files WHERE file_id = ? LIMIT 1;",
+                        (str(file_id),),
+                    ).fetchone()
+                    if not existing:
+                        return None
+                    if self._table_has_column("files", "file_path"):
+                        self.cursor.execute(
+                            """
+                            UPDATE files
+                            SET file_name = ?,
+                                borehole_id = ?,
+                                part_of_file_id = ?,
+                                creation_date = datetime('now'),
+                                data = ?,
+                                file_path = COALESCE(?, file_path)
+                            WHERE file_id = ?;
+                            """,
+                            (
+                                file_name,
+                                borehole_id,
+                                int(part_of_file_id),
+                                serialized,
+                                normalized_path,
+                                str(file_id),
+                            ),
+                        )
+                    else:
+                        self.cursor.execute(
+                            """
+                            UPDATE files
+                            SET file_name = ?,
+                                borehole_id = ?,
+                                part_of_file_id = ?,
+                                creation_date = datetime('now'),
+                                data = ?
+                            WHERE file_id = ?;
+                            """,
+                            (
+                                file_name,
+                                borehole_id,
+                                int(part_of_file_id),
+                                serialized,
+                                str(file_id),
+                            ),
+                        )
+                    return str(file_id)
 
-                if existing:
-                    file_id = existing["file_id"]
+                file_id = str(uuid4())
+                if self._table_has_column("files", "file_path"):
                     self.cursor.execute(
                         """
-                        UPDATE files
-                        SET file_name = ?,
-                            borehole_id = ?,
-                            part_of_file_id = ?,
-                            creation_date = datetime('now'),
-                            data = ?
-                        WHERE file_path = ?;
+                        INSERT INTO files(
+                            file_id,
+                            file_name,
+                            borehole_id,
+                            part_of_file_id,
+                            creation_date,
+                            data,
+                            file_path
+                        )
+                        VALUES (?, ?, ?, ?, datetime('now'), ?, ?);
                         """,
                         (
+                            file_id,
                             file_name,
                             borehole_id,
                             int(part_of_file_id),
@@ -364,31 +434,27 @@ class DbStorage:
                             normalized_path,
                         ),
                     )
-                    return str(file_id)
-
-                file_id = str(uuid4())
-                self.cursor.execute(
-                    """
-                    INSERT INTO files(
-                        file_id,
-                        file_name,
-                        borehole_id,
-                        part_of_file_id,
-                        creation_date,
-                        data,
-                        file_path
+                else:
+                    self.cursor.execute(
+                        """
+                        INSERT INTO files(
+                            file_id,
+                            file_name,
+                            borehole_id,
+                            part_of_file_id,
+                            creation_date,
+                            data
+                        )
+                        VALUES (?, ?, ?, ?, datetime('now'), ?);
+                        """,
+                        (
+                            file_id,
+                            file_name,
+                            borehole_id,
+                            int(part_of_file_id),
+                            serialized,
+                        ),
                     )
-                    VALUES (?, ?, ?, ?, datetime('now'), ?, ?);
-                    """,
-                    (
-                        file_id,
-                        file_name,
-                        borehole_id,
-                        int(part_of_file_id),
-                        serialized,
-                        normalized_path,
-                    ),
-                )
                 return file_id
         except sqlite3.OperationalError:
             # Если таблица/колонки отсутствуют или схема несовместима — просто не кешируем файл.
