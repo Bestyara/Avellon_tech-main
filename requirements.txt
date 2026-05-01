@@ -6,3 +6,4 @@ numpy
 PyQt5
 scipy
 sqlite3
+pytest
