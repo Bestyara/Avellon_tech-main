@@ -28,7 +28,7 @@ jobs:
         ./scripts/init_macos.sh
     - name: Build project
       run: |
-        venv/bin/python -m compileall -q .
+        venv/bin/python -m compileall -q -x '(^|/)(venv|\.venv|__pycache__|\.git|\.github)(/|$)' .
 
   test:
     runs-on: ubuntu-latest
