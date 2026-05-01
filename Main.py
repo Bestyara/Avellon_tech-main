@@ -1,8 +1,8 @@
 import sys
 from PySide6.QtWidgets import QApplication
 
-from db_storage import DbStorage
-from main_window import MainWindow
+from repositories import DbStorage
+from ui.windows import MainWindow
 
 
 def main() -> None:
